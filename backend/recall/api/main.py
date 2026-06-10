@@ -7,8 +7,8 @@ from recall.api import routes_actions, routes_admin, routes_items
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Recall",
-        description="Instagram saved-reels organizer with AI extraction",
+        title="Zanzo",
+        description="Zanzo - the afterimage of everything you scroll. Instagram saved-reels organizer with AI extraction.",
         version="0.1.0",
     )
     app.add_middleware(

@@ -34,7 +34,8 @@ export function Sidebar() {
       <div className="flex md:flex-col items-center md:items-stretch gap-1 p-3 md:p-4 overflow-x-auto md:overflow-visible">
         <Link href="/" className="flex items-center gap-2 px-2 py-1 md:mb-6 shrink-0">
           <Bookmark className="size-5 text-violet-400" />
-          <span className="text-lg font-semibold tracking-tight">Recall</span>
+          <span className="text-lg font-semibold tracking-tight">Zanzo</span>
+          <span className="text-xs text-zinc-600">残像</span>
         </Link>
         {NAV.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;

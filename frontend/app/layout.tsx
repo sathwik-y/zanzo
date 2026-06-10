@@ -7,8 +7,8 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Recall",
-  description: "Your Instagram saves, organized and searchable",
+  title: "Zanzo",
+  description: "The afterimage of everything you scroll. Your Instagram saves, organized and searchable.",
 };
 
 export default function RootLayout({

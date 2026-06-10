@@ -1,8 +1,10 @@
-# Recall
+# Zanzo (残像)
+
+> *Zanzō* — "afterimage": the image that lingers in your vision after the thing is gone.
 
 Your Instagram saves, organized and searchable. Save a reel on Instagram (or DM it to your bot account) and within minutes it shows up in your dashboard — transcribed, categorized, and with the useful parts extracted into structured data: event dates, recipe ingredients, travel spots, code snippets.
 
-Stop losing recipes, events and recommendations in your saved folder.
+The reel scrolls past; the afterimage stays. Stop losing recipes, events and recommendations in your saved folder.
 
 ## What it does
 
@@ -18,7 +20,7 @@ Stop losing recipes, events and recommendations in your saved folder.
 
 ## How it compares
 
-Tools like ReelRecall, Dewey and Bookmarkjar already organize Instagram saves, and if you want a polished hosted product you should use one of them. Recall exists because they all share three gaps: you have to manually send each post to them, their extraction is generic (summary + tags) rather than schema-per-category, and your data lives in their cloud behind a subscription. Recall trades their polish for automation, structured extraction and ownership.
+Tools like ReelRecall, Dewey and Bookmarkjar already organize Instagram saves, and if you want a polished hosted product you should use one of them. Zanzo exists because they all share three gaps: you have to manually send each post to them, their extraction is generic (summary + tags) rather than schema-per-category, and your data lives in their cloud behind a subscription. Zanzo trades their polish for automation, structured extraction and ownership.
 
 ## Architecture
 

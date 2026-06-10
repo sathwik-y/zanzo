@@ -262,12 +262,12 @@ export default function ItemPage({ params }: { params: Promise<{ id: string }> }
             />
             <ActionButton
               icon={Trash2}
-              label="Delete from Recall"
+              label="Delete from Zanzo"
               danger
               busy={busy === "delete"}
               onClick={() =>
                 run("delete", async () => {
-                  if (!confirm("Remove this item from Recall? (It stays saved on Instagram.)")) return;
+                  if (!confirm("Remove this item from Zanzo? (It stays saved on Instagram.)")) return;
                   await api(`items/${item.id}`, { method: "DELETE" });
                   router.push("/");
                 })
