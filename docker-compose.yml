@@ -106,6 +106,22 @@ services:
         condition: service_healthy
     profiles: ["app"]
 
+  engagement:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m recall.services.engagement
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://recall:recall@postgres:5432/recall
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["app"]
+
   frontend:
     build:
       context: ./frontend
