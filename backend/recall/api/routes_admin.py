@@ -1,0 +1,80 @@
+"""Stats, poller control, health."""
+from datetime import UTC, datetime, timedelta
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from recall.api.deps import get_db, require_api_key
+from recall.api.schemas import PollerStatus, StatsResponse
+from recall.models import LlmUsage, SavedItem
+from recall.queueing import RedisQueue
+from recall.state import POLLER_KEY, get_state, set_state
+
+router = APIRouter(tags=["admin"])
+
+
+@router.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@router.get("/stats", response_model=StatsResponse, dependencies=[Depends(require_api_key)])
+def stats(db: Session = Depends(get_db)):
+    by_category = dict(
+        db.execute(
+            select(SavedItem.category, func.count())
+            .where(SavedItem.category.is_not(None))
+            .group_by(SavedItem.category)
+        ).all()
+    )
+    by_status = dict(db.execute(select(SavedItem.status, func.count()).group_by(SavedItem.status)).all())
+    failed = sum(v for k, v in by_status.items() if k.startswith("FAILED_"))
+
+    month_start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    cost_total = db.scalar(select(func.coalesce(func.sum(LlmUsage.cost_usd), 0.0))) or 0.0
+    cost_month = (
+        db.scalar(
+            select(func.coalesce(func.sum(LlmUsage.cost_usd), 0.0)).where(
+                LlmUsage.created_at >= month_start
+            )
+        )
+        or 0.0
+    )
+    week_ago = datetime.now(UTC) - timedelta(days=7)
+    recent = db.scalar(
+        select(func.count()).select_from(SavedItem).where(SavedItem.ingested_at >= week_ago)
+    )
+
+    return StatsResponse(
+        total_items=sum(by_status.values()),
+        by_category=by_category,
+        by_status=by_status,
+        failed_count=failed,
+        llm_cost_total_usd=round(cost_total, 4),
+        llm_cost_month_usd=round(cost_month, 4),
+        items_last_7_days=recent or 0,
+    )
+
+
+@router.get("/poller/status", response_model=PollerStatus, dependencies=[Depends(require_api_key)])
+def poller_status(db: Session = Depends(get_db)):
+    state = get_state(db, POLLER_KEY)
+    try:
+        depth = RedisQueue().depth()
+    except Exception:
+        depth = None
+    return PollerStatus(
+        status=state.get("status", "unknown"),
+        last_run_at=state.get("last_run_at"),
+        last_new_items=state.get("last_new_items"),
+        last_error=state.get("last_error"),
+        queue_depth=depth,
+    )
+
+
+@router.post("/poller/resume", response_model=PollerStatus, dependencies=[Depends(require_api_key)])
+def poller_resume(db: Session = Depends(get_db)):
+    """Resume after you've resolved an Instagram challenge in the app."""
+    set_state(db, POLLER_KEY, {"status": "running", "last_error": None})
+    return poller_status(db)

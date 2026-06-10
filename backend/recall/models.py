@@ -97,6 +97,10 @@ class SavedItem(Base):
     extraction: Mapped["Extraction | None"] = relationship(
         back_populates="item", uselist=False, cascade="all, delete-orphan"
     )
+
+    @property
+    def extraction_payload(self) -> dict | None:
+        return self.extraction.payload if self.extraction else None
     media_refs: Mapped[list["MediaRef"]] = relationship(
         back_populates="item", cascade="all, delete-orphan"
     )
