@@ -155,6 +155,20 @@ class GeminiClient:
         self._record(db, item_id, "extract", resp, model)
         return json.loads(resp.text)
 
+    def detect_cta(self, db: Session, item_id, caption: str | None, transcript: str | None) -> dict:
+        from recall.pipeline.cta import CTA_SCHEMA, build_cta_prompt
+
+        resp, model = self._generate(
+            build_cta_prompt(caption, transcript),
+            {
+                "response_mime_type": "application/json",
+                "response_schema": CTA_SCHEMA,
+                "temperature": 0,
+            },
+        )
+        self._record(db, item_id, "cta", resp, model)
+        return json.loads(resp.text)
+
     def embed(self, db: Session, item_id, text: str) -> list[float]:
         resp = self._client.models.embed_content(
             model=self._embedding_model,
@@ -227,6 +241,26 @@ class FakeGemini:
             Category.OTHER: {"summary": summary, "tags": ["fake"]},
         }
         return payloads[Category(category)]
+
+    CTA_KEYWORDS = ["comment", "link in", "dm me", "dm the word", "follow me", "comment below"]
+
+    def detect_cta(self, db, item_id, caption, transcript) -> dict:
+        import re
+
+        text = f"{caption or ''} {transcript or ''}".lower()
+        if not any(k in text for k in self.CTA_KEYWORDS):
+            return {"is_cta": False, "keyword": None, "needs_follow": False, "channel": "comment"}
+        # pull a likely keyword: a quoted word, or an ALL-CAPS token in the original text
+        keyword = None
+        m = re.search(r'["“‘]([A-Za-z0-9 ]{2,20})["”’]', f"{caption or ''} {transcript or ''}")
+        if m:
+            keyword = m.group(1).strip()
+        else:
+            caps = re.findall(r"\b[A-Z]{3,15}\b", f"{caption or ''} {transcript or ''}")
+            keyword = caps[0] if caps else "LINK"
+        needs_follow = "follow" in text
+        channel = "dm" if ("dm me" in text or "dm the word" in text) else "comment"
+        return {"is_cta": True, "keyword": keyword, "needs_follow": needs_follow, "channel": channel}
 
     def embed(self, db, item_id, text: str) -> list[float]:
         settings = get_settings()

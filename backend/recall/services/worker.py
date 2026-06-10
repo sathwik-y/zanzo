@@ -13,6 +13,7 @@ from recall.pipeline.ai_stages import (
     make_embed_stage,
     make_extract_stage,
 )
+from recall.pipeline.cta import make_cta_stage
 from recall.pipeline.fetch import make_fetch_stage
 from recall.pipeline.runner import Stage, process_item
 from recall.pipeline.transcribe import make_transcribe_stage
@@ -33,11 +34,20 @@ def build_stages(storage=None, ai=None) -> dict[str, Stage]:
             _client_cache["cl"] = build_client()
         return _client_cache["cl"]
 
+    # CTA detection runs right after extraction but is non-fatal: compose the
+    # two so the runner still sees a single "extract" stage.
+    extract_stage = make_extract_stage(ai, storage)
+    cta_stage = make_cta_stage(ai)
+
+    def extract_then_cta(db, item):
+        extract_stage(db, item)
+        cta_stage(db, item)
+
     return {
         "fetch": make_fetch_stage(storage, get_client),
         "transcribe": make_transcribe_stage(storage),
         "classify": make_classify_stage(ai, storage),
-        "extract": make_extract_stage(ai, storage),
+        "extract": extract_then_cta,
         "embed": make_embed_stage(ai),
     }
 
