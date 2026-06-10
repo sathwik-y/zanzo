@@ -37,7 +37,7 @@ def build_stages(storage=None, ai=None) -> dict[str, Stage]:
         "fetch": make_fetch_stage(storage, get_client),
         "transcribe": make_transcribe_stage(storage),
         "classify": make_classify_stage(ai, storage),
-        "extract": make_extract_stage(ai),
+        "extract": make_extract_stage(ai, storage),
         "embed": make_embed_stage(ai),
     }
 

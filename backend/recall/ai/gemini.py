@@ -55,6 +55,48 @@ class GeminiClient:
                 last_exc = exc
         raise last_exc
 
+    def _media_parts(self, media: list[dict] | None) -> list:
+        """Turn visual descriptors into Gemini Parts.
+
+        Images go inline; videos are uploaded via the Files API (handles size
+        and lets the model sample frames), then deleted after the call.
+        """
+        from google.genai import types
+
+        parts: list = []
+        self._uploaded_files = []
+        for m in media or []:
+            if m["kind"] == "image":
+                parts.append(types.Part.from_bytes(data=m["bytes"], mime_type=m["mime"]))
+            elif m["kind"] == "video":
+                import io
+
+                uploaded = self._client.files.upload(
+                    file=io.BytesIO(m["bytes"]), config={"mime_type": m["mime"]}
+                )
+                uploaded = self._wait_active(uploaded)
+                parts.append(uploaded)
+                self._uploaded_files.append(uploaded)
+        return parts
+
+    def _wait_active(self, file, timeout_s: int = 120):
+        import time as _time
+
+        waited = 0
+        while getattr(file.state, "name", str(file.state)) == "PROCESSING" and waited < timeout_s:
+            _time.sleep(2)
+            waited += 2
+            file = self._client.files.get(name=file.name)
+        return file
+
+    def _cleanup_files(self) -> None:
+        for f in getattr(self, "_uploaded_files", []):
+            try:
+                self._client.files.delete(name=f.name)
+            except Exception:
+                logger.warning("could not delete uploaded file %s", getattr(f, "name", "?"))
+        self._uploaded_files = []
+
     def classify(
         self,
         db: Session,
@@ -62,21 +104,27 @@ class GeminiClient:
         caption: str | None,
         transcript: str | None,
         thumbnail: bytes | None = None,
+        media: list[dict] | None = None,
     ) -> dict:
         from google.genai import types
 
         contents: list = [build_classifier_prompt(caption, transcript)]
-        if thumbnail:
+        if media:
+            contents.extend(self._media_parts(media))
+        elif thumbnail:
             contents.append(types.Part.from_bytes(data=thumbnail, mime_type="image/jpeg"))
 
-        resp, model = self._generate(
-            contents,
-            {
-                "response_mime_type": "application/json",
-                "response_schema": CLASSIFIER_SCHEMA,
-                "temperature": 0,
-            },
-        )
+        try:
+            resp, model = self._generate(
+                contents,
+                {
+                    "response_mime_type": "application/json",
+                    "response_schema": CLASSIFIER_SCHEMA,
+                    "temperature": 0,
+                },
+            )
+        finally:
+            self._cleanup_files()
         self._record(db, item_id, "classify", resp, model)
         return json.loads(resp.text)
 
@@ -88,15 +136,22 @@ class GeminiClient:
         caption: str | None,
         transcript: str | None,
         kind: str = "reel",
+        media: list[dict] | None = None,
     ) -> dict:
-        resp, model = self._generate(
-            build_extractor_prompt(category, caption, transcript, kind),
-            {
-                "response_mime_type": "application/json",
-                "response_schema": EXTRACTION_SCHEMAS[category],
-                "temperature": 0,
-            },
-        )
+        contents: list = [build_extractor_prompt(category, caption, transcript, kind)]
+        if media:
+            contents.extend(self._media_parts(media))
+        try:
+            resp, model = self._generate(
+                contents,
+                {
+                    "response_mime_type": "application/json",
+                    "response_schema": EXTRACTION_SCHEMAS[category],
+                    "temperature": 0,
+                },
+            )
+        finally:
+            self._cleanup_files()
         self._record(db, item_id, "extract", resp, model)
         return json.loads(resp.text)
 
@@ -154,14 +209,14 @@ class FakeGemini:
         Category.EDUCATIONAL: ["learn", "tutorial", "how to", "tips", "guide", "explain"],
     }
 
-    def classify(self, db, item_id, caption, transcript, thumbnail=None) -> dict:
+    def classify(self, db, item_id, caption, transcript, thumbnail=None, media=None) -> dict:
         text = f"{caption or ''} {transcript or ''}".lower()
         for category, words in self.KEYWORDS.items():
             if any(w in text for w in words):
                 return {"category": category.value, "confidence": 0.9, "reasoning": "keyword match (fake mode)"}
         return {"category": "OTHER", "confidence": 0.5, "reasoning": "no keyword match (fake mode)"}
 
-    def extract(self, db, item_id, category, caption, transcript, kind="reel") -> dict:
+    def extract(self, db, item_id, category, caption, transcript, kind="reel", media=None) -> dict:
         summary = (caption or transcript or "no content")[:200]
         payloads = {
             Category.EDUCATIONAL: {"topic": summary[:60], "key_takeaways": ["fake takeaway"], "summary": summary},

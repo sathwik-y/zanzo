@@ -1,13 +1,12 @@
 """Stages 3-5: classify, extract, embed."""
 import logging
-import tempfile
-from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from recall.categories import SCHEMA_VERSION, Category
-from recall.models import Embedding, Extraction, MediaKind, SavedItem
+from recall.models import Embedding, Extraction, SavedItem
+from recall.pipeline.visual import gather_visual_parts
 from recall.storage import MediaStorage
 
 logger = logging.getLogger(__name__)
@@ -15,33 +14,28 @@ logger = logging.getLogger(__name__)
 
 def make_classify_stage(ai, storage: MediaStorage) -> callable:
     def classify(db: Session, item: SavedItem) -> None:
-        thumbnail = None
-        thumb_ref = next(
-            (r for r in item.media_refs if r.media_kind == MediaKind.THUMBNAIL), None
-        )
-        if thumb_ref:
-            try:
-                with tempfile.TemporaryDirectory() as tmp:
-                    p = Path(tmp) / "thumb.jpg"
-                    storage.get_to_file(thumb_ref.s3_key, p)
-                    thumbnail = p.read_bytes()
-            except Exception:
-                logger.warning("thumbnail unavailable for %s; classifying text-only", item.media_pk)
-
-        result = ai.classify(db, item.id, item.caption, item.transcript, thumbnail)
+        media = gather_visual_parts(storage, item)
+        result = ai.classify(db, item.id, item.caption, item.transcript, media=media)
         item.category = Category(result["category"]).value
         item.category_confidence = float(result.get("confidence", 0.0))
         db.commit()
-        logger.info("classified %s as %s (%.2f)", item.media_pk, item.category, item.category_confidence)
+        logger.info(
+            "classified %s as %s (%.2f, %d visual parts)",
+            item.media_pk,
+            item.category,
+            item.category_confidence,
+            len(media),
+        )
 
     return classify
 
 
-def make_extract_stage(ai) -> callable:
+def make_extract_stage(ai, storage: MediaStorage | None = None) -> callable:
     def extract(db: Session, item: SavedItem) -> None:
         category = Category(item.category or Category.OTHER)
         kind = "reel" if item.media_type in ("REEL", "IGTV") else "post"
-        payload = ai.extract(db, item.id, category, item.caption, item.transcript, kind)
+        media = gather_visual_parts(storage, item) if storage is not None else None
+        payload = ai.extract(db, item.id, category, item.caption, item.transcript, kind, media=media)
 
         existing = db.scalar(select(Extraction).where(Extraction.item_id == item.id))
         if existing:
