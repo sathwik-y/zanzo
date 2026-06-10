@@ -37,9 +37,11 @@ class GeminiClient:
         self._dims = settings.embedding_dimensions
 
     def _generate(self, contents, config) -> tuple:
-        """Try the primary model, then fallbacks on 5xx capacity errors.
+        """Try the primary model, then fallbacks.
 
-        Returns (response, model_used).
+        Falls through on 5xx (capacity) and 429 (quota) errors. Each model has
+        a separate free-tier quota, so falling back on 429 multiplies available
+        headroom. Returns (response, model_used).
         """
         from google.genai import errors
 
@@ -53,6 +55,12 @@ class GeminiClient:
             except errors.ServerError as exc:
                 logger.warning("model %s unavailable (%s); trying fallback", model, exc)
                 last_exc = exc
+            except errors.ClientError as exc:
+                if getattr(exc, "code", None) == 429:
+                    logger.warning("model %s quota exhausted (429); trying fallback", model)
+                    last_exc = exc
+                    continue
+                raise
         raise last_exc
 
     def _media_parts(self, media: list[dict] | None) -> list:
