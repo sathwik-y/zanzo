@@ -15,7 +15,20 @@ logger = logging.getLogger(__name__)
 def make_classify_stage(ai, storage: MediaStorage) -> callable:
     def classify(db: Session, item: SavedItem) -> None:
         media = gather_visual_parts(storage, item)
-        result = ai.classify(db, item.id, item.caption, item.transcript, media=media)
+        try:
+            result = ai.classify(db, item.id, item.caption, item.transcript, media=media)
+        except Exception:
+            # Non-destructive: a transient failure (e.g. LLM quota) must not wipe
+            # a category from a prior successful run. Keep it and move on.
+            if item.category:
+                logger.warning(
+                    "classify failed for %s; keeping existing category %s",
+                    item.media_pk,
+                    item.category,
+                )
+                db.rollback()
+                return
+            raise
         item.category = Category(result["category"]).value
         item.category_confidence = float(result.get("confidence", 0.0))
         db.commit()
@@ -35,9 +48,20 @@ def make_extract_stage(ai, storage: MediaStorage | None = None) -> callable:
         category = Category(item.category or Category.OTHER)
         kind = "reel" if item.media_type in ("REEL", "IGTV") else "post"
         media = gather_visual_parts(storage, item) if storage is not None else None
-        payload = ai.extract(db, item.id, category, item.caption, item.transcript, kind, media=media)
-
         existing = db.scalar(select(Extraction).where(Extraction.item_id == item.id))
+        try:
+            payload = ai.extract(
+                db, item.id, category, item.caption, item.transcript, kind, media=media
+            )
+        except Exception:
+            if existing:
+                logger.warning(
+                    "extract failed for %s; keeping existing extraction", item.media_pk
+                )
+                db.rollback()
+                return
+            raise
+
         if existing:
             existing.payload = payload
             existing.schema_version = SCHEMA_VERSION
@@ -70,9 +94,16 @@ def make_embed_stage(ai) -> callable:
     def embed(db: Session, item: SavedItem) -> None:
         from recall.config import get_settings
 
-        vector = ai.embed(db, item.id, build_embed_text(item))
-        model_name = get_settings().gemini_embedding_model
         existing = db.scalar(select(Embedding).where(Embedding.item_id == item.id))
+        try:
+            vector = ai.embed(db, item.id, build_embed_text(item))
+        except Exception:
+            if existing:
+                logger.warning("embed failed for %s; keeping existing embedding", item.media_pk)
+                db.rollback()
+                return
+            raise
+        model_name = get_settings().gemini_embedding_model
         if existing:
             existing.vector = vector
             existing.model = model_name

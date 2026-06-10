@@ -8,6 +8,7 @@ import {
   Calendar,
   ChefHat,
   Cpu,
+  Gift,
   GraduationCap,
   Home,
   Plane,
@@ -17,6 +18,7 @@ import {
 
 const NAV = [
   { href: "/", label: "Feed", icon: Home },
+  { href: "/resources", label: "Resources", icon: Gift },
   { href: "/category/events", label: "Events", icon: Calendar },
   { href: "/category/recipes", label: "Recipes", icon: ChefHat },
   { href: "/category/travel", label: "Travel", icon: Plane },

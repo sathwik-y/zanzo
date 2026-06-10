@@ -81,6 +81,17 @@ export type EngagementRow = {
   created_at: string;
 };
 
+export type ResourceRow = {
+  item_id: string;
+  headline: string;
+  creator_username?: string | null;
+  keyword: string;
+  status: string;
+  needs_follow: boolean;
+  resources: Resource[];
+  last_error?: string | null;
+};
+
 export const ENGAGEMENT_STATUS_LABEL: Record<string, string> = {
   PENDING: "queued",
   FOLLOWING: "followed",

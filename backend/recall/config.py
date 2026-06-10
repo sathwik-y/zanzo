@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: str = ""
+    # Optional comma-separated pool of keys; requests round-robin across them and
+    # fall through to the next key on quota (429). Beats the per-key daily limit.
+    gemini_api_keys: str = ""
     gemini_model: str = "gemini-2.5-flash"
     # tried in order when the primary model returns 5xx (capacity issues)
     gemini_fallback_models: str = "gemini-2.5-flash-lite,gemini-2.0-flash"

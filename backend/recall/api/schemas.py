@@ -120,3 +120,16 @@ class EngagementRow(BaseModel):
     commented_at: datetime | None
     resource_received_at: datetime | None
     created_at: datetime
+
+
+class ResourceRow(BaseModel):
+    """An engagement and any resources harvested for it, for the Resources view."""
+
+    item_id: uuid.UUID
+    headline: str
+    creator_username: str | None
+    keyword: str
+    status: str
+    needs_follow: bool
+    resources: list = []
+    last_error: str | None = None

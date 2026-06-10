@@ -10,6 +10,7 @@ from recall.api.schemas import (
     EngagementConfig,
     EngagementRow,
     PollerStatus,
+    ResourceRow,
     StatsResponse,
 )
 from recall.models import Engagement, LlmUsage, SavedItem
@@ -114,3 +115,39 @@ def engagement_list(limit: int = 50, db: Session = Depends(get_db)):
         select(Engagement).order_by(Engagement.created_at.desc()).limit(limit)
     ).all()
     return [EngagementRow.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/resources", response_model=list[ResourceRow], dependencies=[Depends(require_api_key)]
+)
+def resources_list(db: Session = Depends(get_db)):
+    """Every auto-engagement and the resources harvested for it (Resources view)."""
+    rows = db.scalars(select(Engagement).order_by(Engagement.created_at.desc())).all()
+    out: list[ResourceRow] = []
+    for eng in rows:
+        item = db.get(SavedItem, eng.item_id)
+        if item is None:
+            continue
+        payload = item.extraction.payload if item.extraction else {}
+        headline = (
+            payload.get("title")
+            or payload.get("dish_name")
+            or payload.get("destination")
+            or payload.get("topic")
+            or payload.get("subject")
+            or (item.caption or "")[:80]
+            or item.media_pk
+        )
+        out.append(
+            ResourceRow(
+                item_id=item.id,
+                headline=headline,
+                creator_username=eng.creator_username,
+                keyword=eng.keyword,
+                status=eng.status,
+                needs_follow=eng.needs_follow,
+                resources=item.resources or [],
+                last_error=eng.last_error,
+            )
+        )
+    return out

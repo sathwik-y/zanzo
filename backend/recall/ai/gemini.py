@@ -28,7 +28,17 @@ class GeminiClient:
         from google import genai
 
         settings = get_settings()
-        self._client = genai.Client(api_key=settings.gemini_api_key)
+        # Build a deduped key pool from gemini_api_key + gemini_api_keys.
+        raw = [settings.gemini_api_key, *settings.gemini_api_keys.split(",")]
+        keys, seen = [], set()
+        for k in (k.strip() for k in raw):
+            if k and k not in seen:
+                seen.add(k)
+                keys.append(k)
+        if not keys:
+            raise RuntimeError("no Gemini API key configured")
+        self._clients = [genai.Client(api_key=k) for k in keys]
+        self._rr = 0  # round-robin cursor; advances once per request
         self._model = settings.gemini_model
         self._fallbacks = [
             m.strip() for m in settings.gemini_fallback_models.split(",") if m.strip()
@@ -36,74 +46,92 @@ class GeminiClient:
         self._embedding_model = settings.gemini_embedding_model
         self._dims = settings.embedding_dimensions
 
-    def _generate(self, contents, config) -> tuple:
-        """Try the primary model, then fallbacks.
+    def _client_order(self) -> list:
+        """Return all clients, starting at the next round-robin position.
 
-        Falls through on 5xx (capacity) and 429 (quota) errors. Each model has
-        a separate free-tier quota, so falling back on 429 multiplies available
-        headroom. Returns (response, model_used).
+        Each call advances the cursor, so consecutive requests start on
+        different keys; the returned order is the fall-through sequence when a
+        key is quota-exhausted.
         """
-        from google.genai import errors
+        n = len(self._clients)
+        start = self._rr % n
+        self._rr += 1
+        return [self._clients[(start + i) % n] for i in range(n)]
 
-        last_exc: Exception | None = None
-        for model in [self._model, *self._fallbacks]:
-            try:
-                resp = self._client.models.generate_content(
-                    model=model, contents=contents, config=config
-                )
-                return resp, model
-            except errors.ServerError as exc:
-                logger.warning("model %s unavailable (%s); trying fallback", model, exc)
-                last_exc = exc
-            except errors.ClientError as exc:
-                if getattr(exc, "code", None) == 429:
-                    logger.warning("model %s quota exhausted (429); trying fallback", model)
-                    last_exc = exc
-                    continue
-                raise
-        raise last_exc
+    def _build_parts(self, client, media: list[dict] | None, thumbnail: bytes | None) -> tuple:
+        """Build Gemini Parts for one client. Returns (parts, uploaded_files).
 
-    def _media_parts(self, media: list[dict] | None) -> list:
-        """Turn visual descriptors into Gemini Parts.
-
-        Images go inline; videos are uploaded via the Files API (handles size
-        and lets the model sample frames), then deleted after the call.
+        Image bytes go inline (client-agnostic); videos are uploaded via the
+        Files API on THIS client (file refs are project/key-bound), so they must
+        be rebuilt per client when falling through on quota.
         """
         from google.genai import types
 
         parts: list = []
-        self._uploaded_files = []
-        for m in media or []:
-            if m["kind"] == "image":
-                parts.append(types.Part.from_bytes(data=m["bytes"], mime_type=m["mime"]))
-            elif m["kind"] == "video":
-                import io
+        uploaded: list = []
+        if media:
+            import io
 
-                uploaded = self._client.files.upload(
-                    file=io.BytesIO(m["bytes"]), config={"mime_type": m["mime"]}
-                )
-                uploaded = self._wait_active(uploaded)
-                parts.append(uploaded)
-                self._uploaded_files.append(uploaded)
-        return parts
+            for m in media:
+                if m["kind"] == "image":
+                    parts.append(types.Part.from_bytes(data=m["bytes"], mime_type=m["mime"]))
+                elif m["kind"] == "video":
+                    f = client.files.upload(
+                        file=io.BytesIO(m["bytes"]), config={"mime_type": m["mime"]}
+                    )
+                    f = self._wait_active(client, f)
+                    parts.append(f)
+                    uploaded.append(f)
+        elif thumbnail:
+            parts.append(types.Part.from_bytes(data=thumbnail, mime_type="image/jpeg"))
+        return parts, uploaded
 
-    def _wait_active(self, file, timeout_s: int = 120):
+    def _wait_active(self, client, file, timeout_s: int = 120):
         import time as _time
 
         waited = 0
         while getattr(file.state, "name", str(file.state)) == "PROCESSING" and waited < timeout_s:
             _time.sleep(2)
             waited += 2
-            file = self._client.files.get(name=file.name)
+            file = client.files.get(name=file.name)
         return file
 
-    def _cleanup_files(self) -> None:
-        for f in getattr(self, "_uploaded_files", []):
+    def _cleanup(self, client, uploaded: list) -> None:
+        for f in uploaded:
             try:
-                self._client.files.delete(name=f.name)
+                client.files.delete(name=f.name)
             except Exception:
                 logger.warning("could not delete uploaded file %s", getattr(f, "name", "?"))
-        self._uploaded_files = []
+
+    def _generate(self, prompt, config, media=None, thumbnail=None) -> tuple:
+        """Round-robin across keys (model fallback per key), building media
+        parts per client. Falls through on 5xx (capacity) and 429 (quota).
+        Returns (response, model_used).
+        """
+        from google.genai import errors
+
+        last_exc: Exception | None = None
+        for client in self._client_order():
+            parts, uploaded = self._build_parts(client, media, thumbnail)
+            contents = [prompt, *parts]
+            try:
+                for model in [self._model, *self._fallbacks]:
+                    try:
+                        return client.models.generate_content(
+                            model=model, contents=contents, config=config
+                        ), model
+                    except errors.ServerError as exc:
+                        logger.warning("model %s unavailable (%s); falling through", model, exc)
+                        last_exc = exc
+                    except errors.ClientError as exc:
+                        if getattr(exc, "code", None) == 429:
+                            logger.warning("model %s quota exhausted (429); falling through", model)
+                            last_exc = exc
+                            continue
+                        raise
+            finally:
+                self._cleanup(client, uploaded)
+        raise last_exc
 
     def classify(
         self,
@@ -114,25 +142,16 @@ class GeminiClient:
         thumbnail: bytes | None = None,
         media: list[dict] | None = None,
     ) -> dict:
-        from google.genai import types
-
-        contents: list = [build_classifier_prompt(caption, transcript)]
-        if media:
-            contents.extend(self._media_parts(media))
-        elif thumbnail:
-            contents.append(types.Part.from_bytes(data=thumbnail, mime_type="image/jpeg"))
-
-        try:
-            resp, model = self._generate(
-                contents,
-                {
-                    "response_mime_type": "application/json",
-                    "response_schema": CLASSIFIER_SCHEMA,
-                    "temperature": 0,
-                },
-            )
-        finally:
-            self._cleanup_files()
+        resp, model = self._generate(
+            build_classifier_prompt(caption, transcript),
+            {
+                "response_mime_type": "application/json",
+                "response_schema": CLASSIFIER_SCHEMA,
+                "temperature": 0,
+            },
+            media=media,
+            thumbnail=thumbnail,
+        )
         self._record(db, item_id, "classify", resp, model)
         return json.loads(resp.text)
 
@@ -146,20 +165,15 @@ class GeminiClient:
         kind: str = "reel",
         media: list[dict] | None = None,
     ) -> dict:
-        contents: list = [build_extractor_prompt(category, caption, transcript, kind)]
-        if media:
-            contents.extend(self._media_parts(media))
-        try:
-            resp, model = self._generate(
-                contents,
-                {
-                    "response_mime_type": "application/json",
-                    "response_schema": EXTRACTION_SCHEMAS[category],
-                    "temperature": 0,
-                },
-            )
-        finally:
-            self._cleanup_files()
+        resp, model = self._generate(
+            build_extractor_prompt(category, caption, transcript, kind),
+            {
+                "response_mime_type": "application/json",
+                "response_schema": EXTRACTION_SCHEMAS[category],
+                "temperature": 0,
+            },
+            media=media,
+        )
         self._record(db, item_id, "extract", resp, model)
         return json.loads(resp.text)
 
@@ -178,11 +192,27 @@ class GeminiClient:
         return json.loads(resp.text)
 
     def embed(self, db: Session, item_id, text: str) -> list[float]:
-        resp = self._client.models.embed_content(
-            model=self._embedding_model,
-            contents=text[:8000],
-            config={"output_dimensionality": self._dims},
-        )
+        from google.genai import errors
+
+        resp = None
+        last_exc: Exception | None = None
+        for client in self._client_order():
+            try:
+                resp = client.models.embed_content(
+                    model=self._embedding_model,
+                    contents=text[:8000],
+                    config={"output_dimensionality": self._dims},
+                )
+                break
+            except errors.ServerError as exc:
+                last_exc = exc
+            except errors.ClientError as exc:
+                if getattr(exc, "code", None) == 429:
+                    last_exc = exc
+                    continue
+                raise
+        if resp is None:
+            raise last_exc
         # embed_content does not return token usage; estimate chars/4 for the dashboard
         est_tokens = len(text[:8000]) // 4
         db.add(
