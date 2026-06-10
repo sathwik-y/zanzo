@@ -30,3 +30,6 @@ Thumbs.db
 
 # Planning docs (local only)
 docs/superpowers/
+
+# Claude Code local state
+.claude/
