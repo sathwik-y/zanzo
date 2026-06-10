@@ -1,0 +1,66 @@
+{
+  "inbox": {
+    "threads": [
+      {
+        "thread_id": "340282366841710301244259203235489957050",
+        "items": [
+          {
+            "item_id": "31378341976812345",
+            "item_type": "xma_clip",
+            "timestamp": "1781430000000000",
+            "user_id": 60605511491,
+            "xma_clip": [
+              {
+                "xma_layout_type": 4,
+                "preview_url": "https://instagram.example/preview.jpg",
+                "header_title_text": "builders.central",
+                "target_url": "https://www.instagram.com/reel/DYz7y55zEon/?id=3905728284751317543_60605511491&is_sponsored=false"
+              }
+            ]
+          },
+          {
+            "item_id": "31378341976867890",
+            "item_type": "xma_clip",
+            "timestamp": "1781430100000000",
+            "user_id": 60605511491,
+            "xma_clip": [
+              {
+                "xma_layout_type": 4,
+                "preview_url": "https://instagram.example/preview2.jpg",
+                "header_title_text": "techwiser",
+                "target_url": "https://www.instagram.com/reel/DY6idvfIkux/?id=3907587204131736497_588306844&is_sponsored=false"
+              }
+            ]
+          },
+          {
+            "item_id": "31378341976800001",
+            "item_type": "text",
+            "timestamp": "1781430200000000",
+            "text": "check these out"
+          },
+          {
+            "item_id": "31378341976800002",
+            "item_type": "media_share",
+            "timestamp": "1781430300000000",
+            "media_share": {
+              "pk": 3901112223334445556,
+              "code": "DYabcdEFGH",
+              "product_type": "feed",
+              "media_type": 1
+            }
+          },
+          {
+            "item_id": "31378341976800003",
+            "item_type": "xma_clip",
+            "timestamp": "1781430400000000",
+            "xma_clip": [
+              {
+                "target_url": "https://www.instagram.com/reel/DYbroken/?foo=bar"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
