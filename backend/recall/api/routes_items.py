@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from recall.api.deps import get_ai, get_db, get_storage, require_api_key
 from recall.api.schemas import (
     ArchiveRequest,
+    EngagementInfo,
     ItemDetail,
     ItemListResponse,
     ItemSummary,
@@ -17,7 +18,7 @@ from recall.api.schemas import (
 )
 from recall.api.search import hybrid_search
 from recall.categories import Category
-from recall.models import ItemStatus, MediaKind, SavedItem
+from recall.models import Engagement, ItemStatus, MediaKind, SavedItem
 from recall.pipeline.ai_stages import make_embed_stage, make_extract_stage
 from recall.queueing import RedisQueue
 
@@ -110,6 +111,9 @@ def get_item(item_id: uuid.UUID, db: Session = Depends(get_db), storage=Depends(
         MediaItem(kind=r.media_kind, url=storage.presigned_url(r.s3_key), bytes=r.bytes)
         for r in item.media_refs
     ]
+    eng = db.scalar(select(Engagement).where(Engagement.item_id == item.id))
+    if eng:
+        detail.engagement = EngagementInfo.model_validate(eng)
     return detail
 
 

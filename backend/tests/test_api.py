@@ -114,6 +114,39 @@ def test_poller_status_and_resume(client, auth):
     assert client.get("/poller/status", headers=auth).json()["status"] == "running"
 
 
+def test_engagement_config_get_and_update(client, auth):
+    cfg = client.get("/engagement/config", headers=auth).json()
+    assert cfg["enabled"] is True
+    assert cfg["daily_comment_cap"] == 8
+    cfg["daily_comment_cap"] = 3
+    cfg["enabled"] = False
+    updated = client.put("/engagement/config", json=cfg, headers=auth).json()
+    assert updated["daily_comment_cap"] == 3
+    assert updated["enabled"] is False
+    # restore default so other tests/live runs are unaffected
+    cfg["daily_comment_cap"] = 8
+    cfg["enabled"] = True
+    client.put("/engagement/config", json=cfg, headers=auth)
+
+
+def test_item_detail_includes_engagement_and_resources(client, auth, db, make_item):
+    from recall.models import Engagement
+
+    item = make_item(status="COMPLETED")
+    item.resources = [{"url": "https://example.com/guide", "text": "here", "source": "dm"}]
+    db.add(
+        Engagement(
+            item_id=item.id, creator_username="creator1", media_pk=item.media_pk,
+            keyword="GMB", needs_follow=True, channel="both", status="RESOURCE_RECEIVED",
+        )
+    )
+    db.commit()
+    detail = client.get(f"/items/{item.id}", headers=auth).json()
+    assert detail["resources"][0]["url"] == "https://example.com/guide"
+    assert detail["engagement"]["status"] == "RESOURCE_RECEIVED"
+    assert detail["engagement"]["keyword"] == "GMB"
+
+
 def test_event_ics(client, auth, db, make_item):
     item = make_item(category="EVENT", status="COMPLETED")
     db.add(

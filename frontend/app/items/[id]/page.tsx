@@ -8,11 +8,19 @@ import {
   CalendarPlus,
   ClipboardCopy,
   ExternalLink,
+  Gift,
+  Link as LinkIcon,
   Loader2,
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { api, CATEGORIES, CATEGORY_META, ItemDetail } from "@/lib/api";
+import {
+  api,
+  CATEGORIES,
+  CATEGORY_META,
+  ENGAGEMENT_STATUS_LABEL,
+  ItemDetail,
+} from "@/lib/api";
 import { CategoryBadge, SourceChip, StatusChip } from "@/components/badges";
 import { ExtractionView } from "@/components/extraction-view";
 
@@ -131,6 +139,44 @@ export default function ItemPage({ params }: { params: Promise<{ id: string }> }
       </div>
 
       <aside className="space-y-6">
+        {item.engagement && (
+          <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+            <h2 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-zinc-500">
+              <Gift className="size-4 text-violet-400" /> Auto-engagement
+            </h2>
+            <p className="text-sm text-zinc-300">
+              {item.engagement.needs_follow ? "Followed + commented" : "Commented"}{" "}
+              <span className="font-mono text-violet-300">{item.engagement.keyword}</span> to @
+              {item.engagement.creator_username}
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">
+              status: {ENGAGEMENT_STATUS_LABEL[item.engagement.status] ?? item.engagement.status}
+            </p>
+            {item.engagement.last_error && (
+              <p className="mt-1 text-xs text-red-300/80">{item.engagement.last_error}</p>
+            )}
+          </section>
+        )}
+
+        {item.resources && item.resources.length > 0 && (
+          <section className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-violet-300">
+              <Gift className="size-4" /> Resources
+            </h2>
+            <ul className="space-y-2">
+              {item.resources.map((r, i) => (
+                <li key={i}>
+                  <a href={r.url} target="_blank" className="flex items-start gap-2 text-sm text-violet-300 underline break-all">
+                    <LinkIcon className="mt-0.5 size-3.5 shrink-0" />
+                    {r.url}
+                  </a>
+                  {r.text && <p className="mt-0.5 pl-5 text-xs text-zinc-500">{r.text}</p>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {item.extraction && (
           <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
             <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-zinc-500">Extracted</h2>

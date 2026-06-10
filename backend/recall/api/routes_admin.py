@@ -6,10 +6,21 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from recall.api.deps import get_db, require_api_key
-from recall.api.schemas import PollerStatus, StatsResponse
-from recall.models import LlmUsage, SavedItem
+from recall.api.schemas import (
+    EngagementConfig,
+    EngagementRow,
+    PollerStatus,
+    StatsResponse,
+)
+from recall.models import Engagement, LlmUsage, SavedItem
 from recall.queueing import RedisQueue
-from recall.state import POLLER_KEY, get_state, set_state
+from recall.state import (
+    ENGAGEMENT_KEY,
+    POLLER_KEY,
+    get_engagement_config,
+    get_state,
+    set_state,
+)
 
 router = APIRouter(tags=["admin"])
 
@@ -78,3 +89,28 @@ def poller_resume(db: Session = Depends(get_db)):
     """Resume after you've resolved an Instagram challenge in the app."""
     set_state(db, POLLER_KEY, {"status": "running", "last_error": None})
     return poller_status(db)
+
+
+@router.get(
+    "/engagement/config", response_model=EngagementConfig, dependencies=[Depends(require_api_key)]
+)
+def engagement_config(db: Session = Depends(get_db)):
+    return EngagementConfig(**get_engagement_config(db))
+
+
+@router.put(
+    "/engagement/config", response_model=EngagementConfig, dependencies=[Depends(require_api_key)]
+)
+def update_engagement_config(body: EngagementConfig, db: Session = Depends(get_db)):
+    set_state(db, ENGAGEMENT_KEY, body.model_dump())
+    return EngagementConfig(**get_engagement_config(db))
+
+
+@router.get(
+    "/engagement", response_model=list[EngagementRow], dependencies=[Depends(require_api_key)]
+)
+def engagement_list(limit: int = 50, db: Session = Depends(get_db)):
+    rows = db.scalars(
+        select(Engagement).order_by(Engagement.created_at.desc()).limit(limit)
+    ).all()
+    return [EngagementRow.model_validate(r) for r in rows]

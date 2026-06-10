@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Activity, AlertCircle, CheckCircle2, Loader2, PlayCircle, Wallet } from "lucide-react";
 import { api, CATEGORY_META, PollerStatus, Stats } from "@/lib/api";
+import { EngagementSettings } from "@/components/engagement-settings";
 
 export default function SettingsPage() {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -135,6 +136,8 @@ export default function SettingsPage() {
           )}
         </div>
       </section>
+
+      <EngagementSettings />
     </div>
   );
 }

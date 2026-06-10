@@ -29,14 +29,67 @@ export type Item = {
 
 export type TranscriptSegment = { start: number; end: number; text: string };
 
+export type Resource = { url: string; text?: string; source: string; received_at?: string };
+
+export type EngagementInfo = {
+  status: string;
+  keyword: string;
+  needs_follow: boolean;
+  channel: string;
+  creator_username?: string | null;
+  commented_at?: string | null;
+  dm_sent_at?: string | null;
+  last_error?: string | null;
+};
+
 export type ItemDetail = Item & {
   hashtags?: string[] | null;
   post_created_at?: string | null;
   transcript?: string | null;
   transcript_segments?: TranscriptSegment[] | null;
   transcript_lang?: string | null;
+  transcript_provider?: string | null;
+  resources?: Resource[] | null;
   error_log?: { stage: string; error: string } | null;
   media: { kind: string; url: string; bytes?: number | null }[];
+  engagement?: EngagementInfo | null;
+};
+
+export type EngagementConfig = {
+  enabled: boolean;
+  daily_follow_cap: number;
+  daily_comment_cap: number;
+  daily_dm_cap: number;
+  min_delay_s: number;
+  max_delay_s: number;
+  dm_fallback_after_s: number;
+  exhaust_after_s: number;
+};
+
+export type EngagementRow = {
+  id: string;
+  item_id: string;
+  creator_username?: string | null;
+  keyword: string;
+  needs_follow: boolean;
+  channel: string;
+  status: string;
+  attempts: number;
+  last_error?: string | null;
+  commented_at?: string | null;
+  resource_received_at?: string | null;
+  created_at: string;
+};
+
+export const ENGAGEMENT_STATUS_LABEL: Record<string, string> = {
+  PENDING: "queued",
+  FOLLOWING: "followed",
+  COMMENTED: "commented",
+  AWAITING_REPLY: "awaiting reply",
+  DM_SENT: "DM sent",
+  RESOURCE_RECEIVED: "resource received",
+  EXHAUSTED: "no reply",
+  FAILED: "failed",
 };
 
 export type ItemList = { items: Item[]; total: number; limit: number; offset: number };
