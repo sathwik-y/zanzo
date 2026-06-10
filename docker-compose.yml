@@ -122,17 +122,8 @@ services:
         condition: service_healthy
     profiles: ["app"]
 
-  frontend:
-    build:
-      context: ./frontend
-    environment:
-      BACKEND_URL: http://api:8000
-      BACKEND_API_KEY: ${API_KEY:-change-me}
-    ports:
-      - "3000:3000"
-    depends_on:
-      - api
-    profiles: ["app"]
+  # The dashboard lives in a separate repo: https://github.com/sathwik-y/zanzo-fe
+  # Run it pointed at this backend (BACKEND_URL=http://localhost:8000).
 
 volumes:
   pgdata:

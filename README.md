@@ -41,7 +41,7 @@ Tools like ReelRecall, Dewey and Bookmarkjar already organize Instagram saves, a
 - **Backend:** Python / FastAPI, SQLAlchemy, Alembic
 - **Pipeline:** faster-whisper (local transcription), Gemini (classification + structured extraction + embeddings), with automatic model fallback when the primary model is at capacity
 - **Storage:** Postgres 16 + pgvector (hybrid semantic + text search), MinIO or S3 for media
-- **Frontend:** Next.js 16, Tailwind, dark-mode dashboard with per-category views
+- **Frontend:** Next.js 16, Tailwind, dark-mode dashboard with per-category views — lives in a **separate repo**: [sathwik-y/zanzo-fe](https://github.com/sathwik-y/zanzo-fe)
 - **Queue:** Redis locally; the queue interface is small so an SQS swap on AWS is one class
 
 ## ⚠️ Read this before you set it up
@@ -75,10 +75,10 @@ uvicorn recall.api.main:app --port 8000
 python -m recall.services.worker
 python -m recall.services.poller
 python -m recall.services.engagement   # auto-engagement reconciler (optional)
-
-# dashboard
-cd frontend && npm install && npm run dev          # http://localhost:3000
 ```
+
+The dashboard is a separate project — clone [sathwik-y/zanzo-fe](https://github.com/sathwik-y/zanzo-fe),
+point it at this backend (`BACKEND_URL=http://localhost:8000`), and `npm run dev`.
 
 **Instagram login tip:** password login from a new device usually triggers a checkpoint. The reliable path is the `IG_SESSIONID` cookie: log into instagram.com in your browser as the bot account, open DevTools → Application → Cookies → copy `sessionid` into `.env`. The session persists to `data/ig.session.json` after that.
 
@@ -90,7 +90,7 @@ Set `RECALL_FAKE_INSTAGRAM=true` and `RECALL_FAKE_GEMINI=true` in `.env` to run 
 
 ## Extending
 
-- **Add a category:** add the enum value and JSON schema in `backend/recall/categories.py`, an extractor instruction in `backend/recall/ai/prompts.py`, and (optionally) a renderer in `frontend/components/extraction-view.tsx`. That's it — classification, extraction, storage and search pick it up automatically.
+- **Add a category:** add the enum value and JSON schema in `backend/recall/categories.py`, an extractor instruction in `backend/recall/ai/prompts.py`, and (optionally) a renderer in `components/extraction-view.tsx` over in the [frontend repo](https://github.com/sathwik-y/zanzo-fe). That's it — classification, extraction, storage and search pick it up automatically.
 - **Swap the LLM:** implement the three-method interface in `backend/recall/ai/gemini.py` (`classify`, `extract`, `embed`). The pipeline only knows that interface.
 - **Swap the queue for SQS:** implement `JobQueue` (two methods) in `backend/recall/queueing.py`.
 - **Deploy to AWS:** see [docs/aws-deploy.md](docs/aws-deploy.md).
