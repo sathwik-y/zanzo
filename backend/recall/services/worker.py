@@ -4,8 +4,14 @@ Run with: python -m recall.services.worker
 """
 import logging
 
+from recall.ai.gemini import build_ai_client
 from recall.db import get_session_factory
 from recall.instagram.client import build_client
+from recall.pipeline.ai_stages import (
+    make_classify_stage,
+    make_embed_stage,
+    make_extract_stage,
+)
 from recall.pipeline.fetch import make_fetch_stage
 from recall.pipeline.runner import Stage, process_item
 from recall.pipeline.transcribe import make_transcribe_stage
@@ -15,8 +21,9 @@ from recall.storage import S3Storage
 logger = logging.getLogger(__name__)
 
 
-def build_stages(storage=None) -> dict[str, Stage]:
+def build_stages(storage=None, ai=None) -> dict[str, Stage]:
     storage = storage or S3Storage()
+    ai = ai or build_ai_client()
 
     _client_cache = {}
 
@@ -28,6 +35,9 @@ def build_stages(storage=None) -> dict[str, Stage]:
     return {
         "fetch": make_fetch_stage(storage, get_client),
         "transcribe": make_transcribe_stage(storage),
+        "classify": make_classify_stage(ai, storage),
+        "extract": make_extract_stage(ai),
+        "embed": make_embed_stage(ai),
     }
 
 
