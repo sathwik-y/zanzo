@@ -90,6 +90,8 @@ class SavedItem(Base):
     transcript: Mapped[str | None] = mapped_column(Text)
     transcript_segments: Mapped[list | None] = mapped_column(JSONB)
     transcript_lang: Mapped[str | None] = mapped_column(String(8))
+    transcript_provider: Mapped[str | None] = mapped_column(String(16))
+    resources: Mapped[list | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(24), default=ItemStatus.PENDING, index=True)
     error_log: Mapped[dict | None] = mapped_column(JSONB)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -145,6 +147,52 @@ class Embedding(Base):
     model: Mapped[str] = mapped_column(Text)
 
     item: Mapped[SavedItem] = relationship(back_populates="embedding")
+
+
+class EngagementStatus(StrEnum):
+    PENDING = "PENDING"
+    FOLLOWING = "FOLLOWING"
+    COMMENTED = "COMMENTED"
+    AWAITING_REPLY = "AWAITING_REPLY"
+    DM_SENT = "DM_SENT"
+    RESOURCE_RECEIVED = "RESOURCE_RECEIVED"
+    EXHAUSTED = "EXHAUSTED"
+    FAILED = "FAILED"
+
+
+class EngagementChannel(StrEnum):
+    COMMENT = "comment"
+    DM = "dm"
+    BOTH = "both"
+
+
+class Engagement(Base):
+    """Tracks an automated 'comment KEYWORD to get the link' interaction."""
+
+    __tablename__ = "engagements"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("saved_items.id", ondelete="CASCADE"), unique=True
+    )
+    creator_username: Mapped[str | None] = mapped_column(Text)
+    creator_user_id: Mapped[str | None] = mapped_column(Text)
+    media_pk: Mapped[str] = mapped_column(Text)
+    keyword: Mapped[str] = mapped_column(Text)
+    needs_follow: Mapped[bool] = mapped_column(Boolean, default=False)
+    channel: Mapped[str] = mapped_column(String(8), default=EngagementChannel.COMMENT)
+    status: Mapped[str] = mapped_column(String(20), default=EngagementStatus.PENDING, index=True)
+    attempts: Mapped[int] = mapped_column(BigInteger, default=0)
+    commented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dm_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resource_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    item: Mapped[SavedItem] = relationship()
 
 
 class AppState(Base):

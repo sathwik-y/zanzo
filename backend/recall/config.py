@@ -48,9 +48,17 @@ class Settings(BaseSettings):
     gemini_input_price_per_mtok: float = 0.30
     gemini_output_price_per_mtok: float = 2.50
 
-    # Whisper
+    # Transcription
+    # Deepgram is used when a key is set (multilingual: English, Hindi, Telugu);
+    # faster-whisper is the local zero-cost fallback otherwise.
+    deepgram_api_key: str = ""
+    deepgram_model: str = "nova-2"
     whisper_model_size: str = "small"
     whisper_compute_type: str = "int8"
+
+    # Visual extraction
+    visual_extraction: bool = True
+    transcript_weak_chars: int = 15  # below this, a reel is treated as having no usable audio
 
     # API
     api_key: str = "change-me"
