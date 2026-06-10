@@ -114,5 +114,6 @@ def _store_url(db, storage, item, url: str, tmp_path: Path, kind: str) -> None:
 def _store_file(db, storage, item, path: Path, kind: str) -> None:
     key = f"media/{item.media_pk}/{path.name}"
     size = storage.put_file(path, key)
-    db.add(MediaRef(item_id=item.id, s3_key=key, media_kind=kind, bytes=size))
+    # append via the relationship so later stages see the new ref without a refresh
+    item.media_refs.append(MediaRef(s3_key=key, media_kind=kind, bytes=size))
     db.commit()

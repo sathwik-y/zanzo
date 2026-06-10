@@ -1,10 +1,13 @@
 """Job queue. Redis list locally; the protocol keeps an SQS swap trivial on AWS."""
 import json
+import logging
 from typing import Protocol
 
 import redis
 
 from recall.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class JobQueue(Protocol):
@@ -23,7 +26,12 @@ class RedisQueue:
         self._redis.lpush(self._name, json.dumps({"item_id": item_id}))
 
     def dequeue(self, timeout: int = 5) -> str | None:
-        result = self._redis.brpop([self._name], timeout=timeout)
+        try:
+            result = self._redis.brpop([self._name], timeout=timeout)
+        except (redis.exceptions.TimeoutError, redis.exceptions.ConnectionError) as exc:
+            # transient socket issues must not kill the consumer loop
+            logger.warning("redis dequeue hiccup: %s", exc)
+            return None
         if result is None:
             return None
         _, payload = result

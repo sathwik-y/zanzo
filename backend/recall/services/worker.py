@@ -3,6 +3,7 @@
 Run with: python -m recall.services.worker
 """
 import logging
+import time
 
 from recall.ai.gemini import build_ai_client
 from recall.db import get_session_factory
@@ -49,11 +50,20 @@ def run_forever() -> None:
     logger.info("worker started; waiting for jobs")
 
     while True:
-        item_id = queue.dequeue(timeout=5)
-        if item_id is None:
-            continue
-        with factory() as db:
-            process_item(db, item_id, stages)
+        try:
+            item_id = queue.dequeue(timeout=5)
+            if item_id is None:
+                continue
+            with factory() as db:
+                process_item(db, item_id, stages)
+        except KeyboardInterrupt:
+            logger.info("worker shutting down")
+            break
+        except Exception:
+            # process_item already parks failed items; anything that leaks
+            # here is infrastructure trouble - log it and keep consuming
+            logger.exception("worker loop error")
+            time.sleep(3)
 
 
 if __name__ == "__main__":

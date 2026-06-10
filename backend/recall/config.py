@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # Gemini
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
+    # tried in order when the primary model returns 5xx (capacity issues)
+    gemini_fallback_models: str = "gemini-2.5-flash-lite,gemini-2.0-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 1536
     # USD per 1M tokens, for the cost dashboard (gemini-2.5-flash pricing)

@@ -30,8 +30,30 @@ class GeminiClient:
         settings = get_settings()
         self._client = genai.Client(api_key=settings.gemini_api_key)
         self._model = settings.gemini_model
+        self._fallbacks = [
+            m.strip() for m in settings.gemini_fallback_models.split(",") if m.strip()
+        ]
         self._embedding_model = settings.gemini_embedding_model
         self._dims = settings.embedding_dimensions
+
+    def _generate(self, contents, config) -> tuple:
+        """Try the primary model, then fallbacks on 5xx capacity errors.
+
+        Returns (response, model_used).
+        """
+        from google.genai import errors
+
+        last_exc: Exception | None = None
+        for model in [self._model, *self._fallbacks]:
+            try:
+                resp = self._client.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+                return resp, model
+            except errors.ServerError as exc:
+                logger.warning("model %s unavailable (%s); trying fallback", model, exc)
+                last_exc = exc
+        raise last_exc
 
     def classify(
         self,
@@ -47,16 +69,15 @@ class GeminiClient:
         if thumbnail:
             contents.append(types.Part.from_bytes(data=thumbnail, mime_type="image/jpeg"))
 
-        resp = self._client.models.generate_content(
-            model=self._model,
-            contents=contents,
-            config={
+        resp, model = self._generate(
+            contents,
+            {
                 "response_mime_type": "application/json",
                 "response_schema": CLASSIFIER_SCHEMA,
                 "temperature": 0,
             },
         )
-        self._record(db, item_id, "classify", resp)
+        self._record(db, item_id, "classify", resp, model)
         return json.loads(resp.text)
 
     def extract(
@@ -68,16 +89,15 @@ class GeminiClient:
         transcript: str | None,
         kind: str = "reel",
     ) -> dict:
-        resp = self._client.models.generate_content(
-            model=self._model,
-            contents=build_extractor_prompt(category, caption, transcript, kind),
-            config={
+        resp, model = self._generate(
+            build_extractor_prompt(category, caption, transcript, kind),
+            {
                 "response_mime_type": "application/json",
                 "response_schema": EXTRACTION_SCHEMAS[category],
                 "temperature": 0,
             },
         )
-        self._record(db, item_id, "extract", resp)
+        self._record(db, item_id, "extract", resp, model)
         return json.loads(resp.text)
 
     def embed(self, db: Session, item_id, text: str) -> list[float]:
@@ -101,7 +121,7 @@ class GeminiClient:
         db.commit()
         return list(resp.embeddings[0].values)
 
-    def _record(self, db: Session, item_id, stage: str, resp) -> None:
+    def _record(self, db: Session, item_id, stage: str, resp, model: str | None = None) -> None:
         settings = get_settings()
         usage = getattr(resp, "usage_metadata", None)
         input_tokens = getattr(usage, "prompt_token_count", 0) or 0
@@ -114,7 +134,7 @@ class GeminiClient:
             LlmUsage(
                 item_id=item_id,
                 stage=stage,
-                model=self._model,
+                model=model or self._model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=round(cost, 6),
