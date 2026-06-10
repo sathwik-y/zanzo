@@ -1,0 +1,171 @@
+"""SQLAlchemy models. Mirrors the spec's data model (section 6) plus:
+
+- saved_items.source: SAVED (from the saved collection) or DM (shared to the bot account)
+- saved_items.transcript_segments: timestamped segments for clickable transcripts
+- app_state: key/value store for poller status and ingestion cursors
+- llm_usage: per-call token usage for the cost dashboard
+"""
+import uuid
+from datetime import UTC, datetime
+from enum import StrEnum
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from recall.db import Base
+
+EMBEDDING_DIMS = 1536
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class MediaType(StrEnum):
+    POST = "POST"
+    REEL = "REEL"
+    CAROUSEL = "CAROUSEL"
+    IGTV = "IGTV"
+
+
+class ItemSource(StrEnum):
+    SAVED = "SAVED"
+    DM = "DM"
+
+
+class ItemStatus(StrEnum):
+    PENDING = "PENDING"
+    FETCHING = "FETCHING"
+    TRANSCRIBING = "TRANSCRIBING"
+    CLASSIFYING = "CLASSIFYING"
+    EXTRACTING = "EXTRACTING"
+    EMBEDDING = "EMBEDDING"
+    COMPLETED = "COMPLETED"
+    FAILED_FETCH = "FAILED_FETCH"
+    FAILED_TRANSCRIBE = "FAILED_TRANSCRIBE"
+    FAILED_CLASSIFY = "FAILED_CLASSIFY"
+    FAILED_EXTRACT = "FAILED_EXTRACT"
+    FAILED_EMBED = "FAILED_EMBED"
+
+    @property
+    def is_failed(self) -> bool:
+        return self.name.startswith("FAILED_")
+
+
+class MediaKind(StrEnum):
+    VIDEO = "VIDEO"
+    IMAGE = "IMAGE"
+    THUMBNAIL = "THUMBNAIL"
+    AUDIO_EXTRACT = "AUDIO_EXTRACT"
+
+
+class SavedItem(Base):
+    __tablename__ = "saved_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    media_pk: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    media_type: Mapped[str] = mapped_column(String(16), default=MediaType.REEL)
+    source: Mapped[str] = mapped_column(String(8), default=ItemSource.SAVED)
+    instagram_url: Mapped[str | None] = mapped_column(Text)
+    author_username: Mapped[str | None] = mapped_column(Text)
+    author_full_name: Mapped[str | None] = mapped_column(Text)
+    caption: Mapped[str | None] = mapped_column(Text)
+    hashtags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    post_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    category: Mapped[str | None] = mapped_column(String(16), index=True)
+    category_confidence: Mapped[float | None] = mapped_column(Float)
+    transcript: Mapped[str | None] = mapped_column(Text)
+    transcript_segments: Mapped[list | None] = mapped_column(JSONB)
+    transcript_lang: Mapped[str | None] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(24), default=ItemStatus.PENDING, index=True)
+    error_log: Mapped[dict | None] = mapped_column(JSONB)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    extraction: Mapped["Extraction | None"] = relationship(
+        back_populates="item", uselist=False, cascade="all, delete-orphan"
+    )
+    media_refs: Mapped[list["MediaRef"]] = relationship(
+        back_populates="item", cascade="all, delete-orphan"
+    )
+    embedding: Mapped["Embedding | None"] = relationship(
+        back_populates="item", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class Extraction(Base):
+    __tablename__ = "extractions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("saved_items.id", ondelete="CASCADE"), unique=True
+    )
+    schema_version: Mapped[str] = mapped_column(String(8), default="1")
+    payload: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    item: Mapped[SavedItem] = relationship(back_populates="extraction")
+
+
+class MediaRef(Base):
+    __tablename__ = "media_refs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("saved_items.id", ondelete="CASCADE"))
+    s3_key: Mapped[str] = mapped_column(Text)
+    media_kind: Mapped[str] = mapped_column(String(16))
+    bytes: Mapped[int | None] = mapped_column(BigInteger)
+
+    item: Mapped[SavedItem] = relationship(back_populates="media_refs")
+
+
+class Embedding(Base):
+    __tablename__ = "embeddings"
+
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("saved_items.id", ondelete="CASCADE"), primary_key=True
+    )
+    vector: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMS))
+    model: Mapped[str] = mapped_column(Text)
+
+    item: Mapped[SavedItem] = relationship(back_populates="embedding")
+
+
+class AppState(Base):
+    __tablename__ = "app_state"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class LlmUsage(Base):
+    __tablename__ = "llm_usage"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("saved_items.id", ondelete="SET NULL"), nullable=True
+    )
+    stage: Mapped[str] = mapped_column(String(16))  # classify | extract | embed
+    model: Mapped[str] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+Index("ix_saved_items_ingested_at", SavedItem.ingested_at.desc())
