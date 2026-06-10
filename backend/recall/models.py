@@ -156,6 +156,7 @@ class EngagementStatus(StrEnum):
     AWAITING_REPLY = "AWAITING_REPLY"
     DM_SENT = "DM_SENT"
     RESOURCE_RECEIVED = "RESOURCE_RECEIVED"
+    INTERACTION_REQUIRED = "INTERACTION_REQUIRED"  # creator replied but a manual in-app click is needed
     EXHAUSTED = "EXHAUSTED"
     FAILED = "FAILED"
 

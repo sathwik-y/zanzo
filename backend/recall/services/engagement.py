@@ -32,6 +32,85 @@ MAX_ATTEMPTS = 5
 _URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Coerce a datetime to timezone-aware UTC.
+
+    instagrapi returns naive datetimes; our DB timestamps are aware. Comparing
+    the two raises, so normalize everything before comparing.
+    """
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
+def _ts_from_micros(raw) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(raw) / 1_000_000, tz=UTC)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_thread_item(item: dict) -> dict:
+    """Normalize a raw direct_v2 thread item into {timestamp, text, urls, needs_interaction}.
+
+    Handles plain text, link attachments, shared media (xma_clip / media_share),
+    and rich cards (generic_xma) including ManyChat-style postback buttons that
+    gate the real link behind an in-app click.
+    """
+    text_parts: list[str] = []
+    urls: list[str] = []
+    needs_interaction = False
+    itype = item.get("item_type")
+
+    if item.get("text"):
+        text_parts.append(item["text"])
+
+    link = item.get("link") or {}
+    if isinstance(link, dict):
+        url = (link.get("link_context") or {}).get("link_url") or link.get("link_url")
+        if url:
+            urls.append(url)
+        if link.get("text"):
+            text_parts.append(link["text"])
+
+    for key in ("generic_xma", "xma_clip", "xma_media_share"):
+        for card in item.get(key) or []:
+            if not isinstance(card, dict):
+                continue
+            for field in ("title_text", "subtitle_text", "caption_body_text"):
+                if card.get(field):
+                    text_parts.append(card[field])
+            if card.get("target_url"):
+                urls.append(card["target_url"])
+            buttons = card.get("cta_buttons") or []
+            has_postback = False
+            for btn in buttons:
+                action = (btn or {}).get("action_url")
+                if action:
+                    urls.append(action)
+                elif (btn or {}).get("cta_type") == "postback":
+                    has_postback = True
+            # a card with only postback buttons and no real link needs a manual click
+            if has_postback and not urls:
+                needs_interaction = True
+
+    clean_urls = []
+    seen = set()
+    for u in urls:
+        u = u.strip()
+        if u and u.startswith("http") and u not in seen:
+            seen.add(u)
+            clean_urls.append(u)
+
+    return {
+        "timestamp": _ts_from_micros(item.get("timestamp")),
+        "text": " ".join(t.strip() for t in text_parts if t).strip() or None,
+        "urls": clean_urls,
+        "needs_interaction": needs_interaction,
+        "item_type": itype,
+    }
+
+
 def harvest_links_from_messages(messages: list[dict], since: datetime | None) -> list[dict]:
     """Pull resource links from a creator's DM messages newer than `since`.
 
@@ -40,8 +119,9 @@ def harvest_links_from_messages(messages: list[dict], since: datetime | None) ->
     """
     resources: list[dict] = []
     seen: set[str] = set()
+    since = _as_utc(since)
     for msg in messages:
-        ts = msg.get("timestamp")
+        ts = _as_utc(msg.get("timestamp"))
         if since is not None and ts is not None and ts <= since:
             continue
         urls = list(msg.get("urls") or [])
@@ -60,6 +140,19 @@ def harvest_links_from_messages(messages: list[dict], since: datetime | None) ->
                 }
             )
     return resources
+
+
+def pending_interaction(messages: list[dict], since: datetime | None) -> str | None:
+    """Return the opening message text if the creator replied with a postback-gated
+    card (link behind an in-app click) newer than `since` and no link was sent."""
+    since = _as_utc(since)
+    for msg in messages:
+        ts = _as_utc(msg.get("timestamp"))
+        if since is not None and ts is not None and ts <= since:
+            continue
+        if msg.get("needs_interaction") and not msg.get("urls"):
+            return msg.get("text") or "Creator replied; open the chat to claim the resource."
+    return None
 
 
 class IgEngagementClient:
@@ -81,27 +174,21 @@ class IgEngagementClient:
         self.cl.direct_send(text, user_ids=[int(user_id)])
 
     def creator_messages(self, user_id: str) -> list[dict]:
-        """Recent DM messages from a creator's thread, normalized."""
+        """Recent DM messages from a creator's thread, normalized via the raw
+        thread endpoint so rich generic_xma cards (and their links) are parsed."""
         try:
             thread = self.cl.direct_thread_by_participants([int(user_id)])
             thread_id = thread["thread"]["thread_id"] if isinstance(thread, dict) else thread.id
         except Exception:
             return []
-        out: list[dict] = []
-        for m in self.cl.direct_messages(thread_id, amount=20):
-            urls = []
-            if getattr(m, "xma_share", None) and getattr(m.xma_share, "video_url", None):
-                urls.append(str(m.xma_share.video_url))
-            if getattr(m, "link", None) and getattr(m.link, "link_url", None):
-                urls.append(str(m.link.link_url))
-            out.append(
-                {
-                    "timestamp": getattr(m, "timestamp", None),
-                    "text": getattr(m, "text", None),
-                    "urls": urls,
-                }
+        try:
+            res = self.cl.private_request(
+                f"direct_v2/threads/{thread_id}/", params={"limit": 20}
             )
-        return out
+            items = res["thread"]["items"]
+        except Exception:
+            return []
+        return [parse_thread_item(it) for it in items]
 
 
 def _today_count(db: Session, column, now: datetime) -> int:
@@ -187,6 +274,26 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
                     eng.resource_received_at = now
                     summary["resources"] += len(new)
                     db.commit()
+                    continue
+
+                # Creator replied but gated the link behind an in-app button click
+                # (ManyChat-style). Record it so the dashboard can prompt a manual claim.
+                opening = pending_interaction(messages, since)
+                if opening and eng.status != EngagementStatus.DM_SENT:
+                    item = db.get(SavedItem, eng.item_id)
+                    existing = list(item.resources or [])
+                    if not any(r.get("source") == "interaction_required" for r in existing):
+                        item.resources = existing + [
+                            {
+                                "url": f"https://www.instagram.com/direct/t/{uid}",
+                                "text": opening[:200],
+                                "source": "interaction_required",
+                                "received_at": now.isoformat(),
+                            }
+                        ]
+                    eng.status = EngagementStatus.INTERACTION_REQUIRED
+                    db.commit()
+                    summary["resources"] += 1
                     continue
 
                 age = (now - eng.commented_at).total_seconds() if eng.commented_at else 0

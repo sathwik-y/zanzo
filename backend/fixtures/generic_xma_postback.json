@@ -1,0 +1,21 @@
+{
+  "item_type": "generic_xma",
+  "timestamp": "1781094960000000",
+  "user_id": 8673453422,
+  "generic_xma": [
+    {
+      "xma_layout_type": 0,
+      "title_text": "Hey there!\n\nClick below and I'll send you the resources on how to use the chrome extension",
+      "target_url": "",
+      "cta_buttons": [
+        {
+          "title": "Click here",
+          "action_url": "",
+          "cta_type": "postback",
+          "platform_token": {"postback": {"postback_payload": "1:GT-PB:OpeningMessage#11335"}}
+        }
+      ],
+      "xma_content_type": 1021
+    }
+  ]
+}

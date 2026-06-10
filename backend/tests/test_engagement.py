@@ -1,8 +1,17 @@
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from recall.models import Engagement, EngagementStatus, SavedItem
-from recall.services.engagement import harvest_links_from_messages, reconcile_once
+from recall.services.engagement import (
+    harvest_links_from_messages,
+    parse_thread_item,
+    pending_interaction,
+    reconcile_once,
+)
 from recall.state import DEFAULT_ENGAGEMENT_CONFIG
+
+FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
 class FakeClient:
@@ -126,6 +135,74 @@ def test_disabled_does_nothing(db, make_item):
     db.refresh(eng)
     assert eng.status == EngagementStatus.PENDING
     assert client.followed == []
+
+
+def test_parse_generic_xma_with_direct_link():
+    item = json.loads((FIXTURES / "generic_xma_link.json").read_text())
+    parsed = parse_thread_item(item)
+    assert "https://helloveeru.com/gmb-workflow?ref=ig" in parsed["urls"]
+    assert parsed["needs_interaction"] is False
+    assert "GMB workflow" in parsed["text"]
+
+
+def test_parse_generic_xma_postback_needs_interaction():
+    item = json.loads((FIXTURES / "generic_xma_postback.json").read_text())
+    parsed = parse_thread_item(item)
+    assert parsed["urls"] == []
+    assert parsed["needs_interaction"] is True
+    assert "Click below" in parsed["text"]
+
+
+def test_pending_interaction_detected():
+    item = json.loads((FIXTURES / "generic_xma_postback.json").read_text())
+    parsed = parse_thread_item(item)
+    # message is newer than `since`
+    text = pending_interaction([parsed], since=datetime(2026, 1, 1, tzinfo=UTC))
+    assert text and "Click below" in text
+
+
+def test_reconcile_marks_interaction_required(db, make_item):
+    item = make_item()
+    commented = datetime.now(UTC) - timedelta(minutes=2)
+    eng = _engagement(
+        db, item, status=EngagementStatus.AWAITING_REPLY, commented_at=commented,
+        creator_user_id="uid-creator1", needs_follow=False, channel="comment",
+    )
+    postback = parse_thread_item(json.loads((FIXTURES / "generic_xma_postback.json").read_text()))
+    postback["timestamp"] = datetime.now(UTC)  # newer than commented_at
+    client = FakeClient(messages=[postback])
+    reconcile_once(db, client, _config(), datetime.now(UTC), sleeper=_noop_sleep)
+    db.refresh(eng)
+    item = db.get(SavedItem, item.id)
+    assert eng.status == EngagementStatus.INTERACTION_REQUIRED
+    assert item.resources[0]["source"] == "interaction_required"
+
+
+def test_reconcile_harvests_generic_xma_link(db, make_item):
+    item = make_item()
+    commented = datetime.now(UTC) - timedelta(minutes=2)
+    eng = _engagement(
+        db, item, status=EngagementStatus.AWAITING_REPLY, commented_at=commented,
+        creator_user_id="uid-creator1", needs_follow=False,
+    )
+    linkmsg = parse_thread_item(json.loads((FIXTURES / "generic_xma_link.json").read_text()))
+    linkmsg["timestamp"] = datetime.now(UTC)
+    client = FakeClient(messages=[linkmsg])
+    reconcile_once(db, client, _config(), datetime.now(UTC), sleeper=_noop_sleep)
+    db.refresh(eng)
+    item = db.get(SavedItem, item.id)
+    assert eng.status == EngagementStatus.RESOURCE_RECEIVED
+    assert "helloveeru.com/gmb-workflow" in item.resources[0]["url"]
+
+
+def test_harvest_handles_naive_message_timestamps():
+    # instagrapi returns naive datetimes; commented_at (since) is tz-aware.
+    # Comparing them must not raise.
+    aware_since = datetime.now(UTC) - timedelta(minutes=10)
+    naive_after = (datetime.now(UTC) + timedelta(minutes=1)).replace(tzinfo=None)
+    msgs = [{"timestamp": naive_after, "text": "link: https://res.com/x", "urls": []}]
+    out = harvest_links_from_messages(msgs, since=aware_since)
+    assert [r["url"] for r in out] == ["https://res.com/x"]
 
 
 def test_harvest_links_dedup_and_since():

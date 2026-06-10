@@ -1,0 +1,16 @@
+{
+  "item_type": "generic_xma",
+  "timestamp": "1781095000000000",
+  "user_id": 8673453422,
+  "generic_xma": [
+    {
+      "xma_layout_type": 0,
+      "title_text": "Here is your free GMB workflow!",
+      "target_url": "https://helloveeru.com/gmb-workflow?ref=ig",
+      "cta_buttons": [
+        {"title": "Open guide", "action_url": "https://helloveeru.com/gmb-workflow?ref=ig", "cta_type": "open_url"}
+      ],
+      "xma_content_type": 1021
+    }
+  ]
+}

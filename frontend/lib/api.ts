@@ -88,6 +88,7 @@ export const ENGAGEMENT_STATUS_LABEL: Record<string, string> = {
   AWAITING_REPLY: "awaiting reply",
   DM_SENT: "DM sent",
   RESOURCE_RECEIVED: "resource received",
+  INTERACTION_REQUIRED: "reply needs a tap in Instagram",
   EXHAUSTED: "no reply",
   FAILED: "failed",
 };
