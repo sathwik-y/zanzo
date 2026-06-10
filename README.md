@@ -1,6 +1,4 @@
-# Zanzo (残像)
-
-> *Zanzō* — "afterimage": the image that lingers in your vision after the thing is gone.
+# Zanzo 
 
 Your Instagram saves, organized and searchable. Save a reel on Instagram (or DM it to your bot account) and within minutes it shows up in your dashboard — transcribed, categorized, and with the useful parts extracted into structured data: event dates, recipe ingredients, travel spots, code snippets.
 
