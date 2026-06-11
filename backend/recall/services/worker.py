@@ -31,7 +31,19 @@ def build_stages(storage=None, ai=None) -> dict[str, Stage]:
 
     def get_client():
         if "cl" not in _client_cache:
-            _client_cache["cl"] = build_client()
+            try:
+                _client_cache["cl"] = build_client()
+            except Exception:
+                # No .env account (pool-only deployment): fetch through a bot.
+                from recall.instagram.bots import active_bots
+                from recall.instagram.client import build_client_for_bot
+
+                with get_session_factory()() as db:
+                    bots = active_bots(db)
+                if not bots:
+                    raise
+                bot = bots[0]
+                _client_cache["cl"] = build_client_for_bot(bot.username, bot.sessionid)
         return _client_cache["cl"]
 
     # CTA detection runs right after extraction but is non-fatal: compose the

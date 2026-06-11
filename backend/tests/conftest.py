@@ -53,7 +53,10 @@ def db(engine):
     session.rollback()
     # Isolated test DB: wipe everything between tests for full isolation.
     session.execute(
-        text("TRUNCATE saved_items, app_state, llm_usage, users RESTART IDENTITY CASCADE")
+        text(
+            "TRUNCATE saved_items, app_state, llm_usage, users, bot_accounts "
+            "RESTART IDENTITY CASCADE"
+        )
     )
     session.commit()
     session.close()

@@ -38,6 +38,34 @@ class UserRole(StrEnum):
     ADMIN = "ADMIN"
 
 
+class BotStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    CHALLENGE = "CHALLENGE"  # Instagram wants manual verification
+    DISABLED = "DISABLED"
+
+
+class BotAccount(Base):
+    """A burner Instagram account users DM their reels to.
+
+    Users are spread across active bots (least-loaded assignment at link time)
+    so no single account carries all the traffic. Credentials are a sessionid
+    cookie; each bot keeps its own instagrapi device file under data/.
+    """
+
+    __tablename__ = "bot_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    sessionid: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), default=BotStatus.ACTIVE, index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    users: Mapped[list["User"]] = relationship(back_populates="bot_account")
+
+
 class User(Base):
     """An account on the hosted app. Items are scoped to their owner.
 
@@ -58,10 +86,14 @@ class User(Base):
     ig_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     ig_verification_code: Mapped[str | None] = mapped_column(String(16))
     ig_verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    bot_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("bot_accounts.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     items: Mapped[list["SavedItem"]] = relationship(back_populates="user")
+    bot_account: Mapped["BotAccount | None"] = relationship(back_populates="users")
 
 
 class MediaType(StrEnum):

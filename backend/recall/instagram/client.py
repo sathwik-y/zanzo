@@ -61,3 +61,29 @@ def build_client() -> Client:
 
     logger.info("instagram login ok (user_id=%s)", cl.user_id)
     return cl
+
+
+def build_client_for_bot(username: str, sessionid: str) -> Client:
+    """Client for a pooled bot account; each bot keeps its own device file so
+    Instagram sees a stable device per account."""
+    settings = get_settings()
+    base = Path(settings.instagrapi_session_path)
+    session_path = base.with_name(f"ig.session.{username}.json")
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cl = Client()
+    cl.delay_range = [2, 5]
+    if session_path.exists():
+        cl.load_settings(session_path)
+    try:
+        cl.login_by_sessionid(sessionid)
+    except (ChallengeRequired, LoginRequired) as exc:
+        raise InstagramChallengeError(str(exc)) from exc
+    finally:
+        try:
+            cl.dump_settings(session_path)
+        except Exception:
+            logger.exception("failed to persist session settings for bot %s", username)
+
+    logger.info("instagram login ok for bot %s (user_id=%s)", username, cl.user_id)
+    return cl

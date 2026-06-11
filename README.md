@@ -92,6 +92,16 @@ Everything (API, worker, poller, dashboard) can also run fully in Docker: `docke
 - Items from the bot's own saved collection (and DMs from unlinked senders) are visible to admins only.
 - The `API_KEY` header (`X-API-Key`) still works as an unscoped *service* credential for scripts and ops.
 
+### Scaling with a bot-account pool
+
+One burner account can only absorb so much traffic before Instagram notices. Admins can register **multiple bot accounts** (username + `sessionid` cookie) from the Admin panel:
+
+- New users are assigned to the **least-loaded active bot** when they link their Instagram; the dashboard tells each user exactly which bot to DM.
+- If a user DMs their verification code to a different bot, they re-bind to that one automatically.
+- The poller sweeps every active bot independently — a challenge on one bot pauses only that bot (admins resolve it from the panel with a fresh sessionid), the rest keep running.
+- Engagement actions (follow/comment/DM-harvest) go through the bot assigned to the item's owner.
+- With no pooled bots, everything falls back to the single account in `.env` — the simple self-host path.
+
 ### Try it without any credentials
 
 Set `RECALL_FAKE_INSTAGRAM=true` and `RECALL_FAKE_GEMINI=true` in `.env` to run the entire pipeline against fixtures — useful for development and for kicking the tires before you commit a burner account.

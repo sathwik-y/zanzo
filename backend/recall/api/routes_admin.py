@@ -7,8 +7,8 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -26,7 +26,7 @@ from recall.api.schemas import (
     ResourceRow,
     StatsResponse,
 )
-from recall.models import Engagement, LlmUsage, SavedItem, User
+from recall.models import BotAccount, BotStatus, Engagement, LlmUsage, SavedItem, User
 from recall.queueing import RedisQueue
 from recall.state import (
     ENGAGEMENT_KEY,
@@ -77,6 +77,36 @@ def stats(db: Session = Depends(get_db), auth: AuthContext = Depends(get_auth)):
         llm_cost_total_usd=round(cost_total, 4),
         llm_cost_month_usd=round(cost_month, 4),
         items_last_7_days=recent or 0,
+    )
+
+
+class NextPoll(BaseModel):
+    status: str
+    last_run_at: str | None = None
+    next_poll_at: str | None = None
+    interval_s: int
+
+
+@router.get("/poller/next", response_model=NextPoll)
+def poller_next(db: Session = Depends(get_db), auth: AuthContext = Depends(get_auth)):
+    """When the next ingestion sweep is expected — for the dashboard countdown.
+    Available to every signed-in user (read-only, no internals)."""
+    from recall.config import get_settings
+
+    state = get_state(db, POLLER_KEY)
+    interval = get_settings().poll_interval_seconds
+    last_raw = state.get("last_run_at")
+    next_at = None
+    if last_raw:
+        try:
+            next_at = (datetime.fromisoformat(last_raw) + timedelta(seconds=interval)).isoformat()
+        except ValueError:
+            pass
+    return NextPoll(
+        status=state.get("status", "unknown"),
+        last_run_at=last_raw,
+        next_poll_at=next_at,
+        interval_s=interval,
     )
 
 
@@ -174,6 +204,7 @@ class AdminUserRow(BaseModel):
     role: str
     ig_username: str | None
     ig_verified: bool
+    bot_username: str | None
     created_at: datetime
     last_login_at: datetime | None
     item_count: int
@@ -190,6 +221,7 @@ def admin_users(db: Session = Depends(get_db)):
             .group_by(SavedItem.user_id)
         ).all()
     )
+    bot_names = dict(db.execute(select(BotAccount.id, BotAccount.username)).all())
     users = db.scalars(select(User).order_by(User.created_at)).all()
     return [
         AdminUserRow(
@@ -199,12 +231,117 @@ def admin_users(db: Session = Depends(get_db)):
             role=u.role,
             ig_username=u.ig_username,
             ig_verified=u.ig_verified,
+            bot_username=bot_names.get(u.bot_account_id),
             created_at=u.created_at,
             last_login_at=u.last_login_at,
             item_count=counts.get(u.id, 0),
         )
         for u in users
     ]
+
+
+class BotRow(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    username: str
+    status: str
+    note: str | None
+    last_poll_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+    assigned_users: int = 0
+
+
+class BotCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    sessionid: str = Field(min_length=8)
+    note: str | None = Field(default=None, max_length=200)
+
+
+class BotUpdate(BaseModel):
+    status: str | None = None  # ACTIVE | DISABLED (CHALLENGE is set by the poller)
+    sessionid: str | None = Field(default=None, min_length=8)
+    note: str | None = Field(default=None, max_length=200)
+
+
+def _bot_rows(db: Session) -> list[BotRow]:
+    counts = dict(
+        db.execute(
+            select(User.bot_account_id, func.count())
+            .where(User.bot_account_id.is_not(None))
+            .group_by(User.bot_account_id)
+        ).all()
+    )
+    bots = db.scalars(select(BotAccount).order_by(BotAccount.created_at)).all()
+    out = []
+    for b in bots:
+        row = BotRow.model_validate(b)
+        row.assigned_users = counts.get(b.id, 0)
+        out.append(row)
+    return out
+
+
+@router.get("/admin/bots", response_model=list[BotRow], dependencies=[Depends(require_admin)])
+def list_bots(db: Session = Depends(get_db)):
+    return _bot_rows(db)
+
+
+@router.post(
+    "/admin/bots", response_model=list[BotRow], status_code=201,
+    dependencies=[Depends(require_admin)],
+)
+def create_bot(body: BotCreate, db: Session = Depends(get_db)):
+    username = body.username.lstrip("@").lower()
+    if db.scalar(select(BotAccount).where(BotAccount.username == username)):
+        raise HTTPException(status_code=409, detail="bot with this username already exists")
+    db.add(BotAccount(username=username, sessionid=body.sessionid, note=body.note))
+    db.commit()
+    return _bot_rows(db)
+
+
+@router.patch(
+    "/admin/bots/{bot_id}", response_model=list[BotRow], dependencies=[Depends(require_admin)]
+)
+def update_bot(bot_id: uuid.UUID, body: BotUpdate, db: Session = Depends(get_db)):
+    bot = db.get(BotAccount, bot_id)
+    if bot is None:
+        raise HTTPException(status_code=404, detail="bot not found")
+    if body.status is not None:
+        if body.status not in (BotStatus.ACTIVE, BotStatus.DISABLED):
+            raise HTTPException(status_code=422, detail="status must be ACTIVE or DISABLED")
+        bot.status = body.status
+        if body.status == BotStatus.ACTIVE:
+            bot.last_error = None
+    if body.sessionid is not None:
+        bot.sessionid = body.sessionid
+        bot.last_error = None
+        if bot.status == BotStatus.CHALLENGE:
+            bot.status = BotStatus.ACTIVE
+    if body.note is not None:
+        bot.note = body.note
+    db.commit()
+    return _bot_rows(db)
+
+
+@router.delete(
+    "/admin/bots/{bot_id}", response_model=list[BotRow], dependencies=[Depends(require_admin)]
+)
+def delete_bot(bot_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Remove a bot; its users are respread across the remaining active bots."""
+    from recall.instagram.bots import pick_least_loaded_bot
+
+    bot = db.get(BotAccount, bot_id)
+    if bot is None:
+        raise HTTPException(status_code=404, detail="bot not found")
+    orphans = db.scalars(select(User).where(User.bot_account_id == bot.id)).all()
+    db.delete(bot)
+    db.flush()
+    for user in orphans:
+        replacement = pick_least_loaded_bot(db)
+        user.bot_account_id = replacement.id if replacement else None
+    db.commit()
+    return _bot_rows(db)
 
 
 @router.get("/admin/stats", response_model=StatsResponse, dependencies=[Depends(require_admin)])

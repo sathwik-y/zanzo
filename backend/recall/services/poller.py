@@ -13,11 +13,12 @@ from sqlalchemy.orm import Session
 
 from recall.config import get_settings
 from recall.db import get_session_factory
-from recall.instagram.client import InstagramChallengeError, build_client
+from recall.instagram.bots import BotClientPool, active_bots
+from recall.instagram.client import InstagramChallengeError
 from recall.instagram.dms import fetch_dm_inbox
 from recall.instagram.saved import fetch_saved
 from recall.instagram.types import DiscoveredMedia, DmText
-from recall.models import ItemStatus, SavedItem, User
+from recall.models import BotAccount, BotStatus, ItemStatus, SavedItem, User
 from recall.queueing import JobQueue, RedisQueue
 from recall.state import POLLER_KEY, get_state, set_state
 
@@ -86,8 +87,14 @@ def ingest_discovered(db: Session, queue: JobQueue, discovered: list[DiscoveredM
     return len(new_items)
 
 
-def process_verification_texts(db: Session, texts: list[DmText]) -> int:
-    """Match DMed verification codes to pending account links. Returns matches."""
+def process_verification_texts(
+    db: Session, texts: list[DmText], bot: BotAccount | None = None
+) -> int:
+    """Match DMed verification codes to pending account links. Returns matches.
+
+    When the code arrived in a pooled bot's inbox, the user is (re)assigned to
+    that bot — it's the account that can actually see their DMs from now on.
+    """
     if not texts:
         return 0
     now = datetime.now(UTC)
@@ -114,6 +121,8 @@ def process_verification_texts(db: Session, texts: list[DmText]) -> int:
                 user.ig_verified = True
                 user.ig_verification_code = None
                 user.ig_verification_expires_at = None
+                if bot is not None:
+                    user.bot_account_id = bot.id
                 verified += 1
                 logger.info(
                     "instagram link verified for %s (ig=%s pk=%s)",
@@ -126,14 +135,60 @@ def process_verification_texts(db: Session, texts: list[DmText]) -> int:
     return verified
 
 
-def poll_once(db: Session, queue: JobQueue, cl) -> int:
+def poll_once(db: Session, queue: JobQueue, cl, bot: BotAccount | None = None) -> int:
     settings = get_settings()
     discovered: list[DiscoveredMedia] = []
     discovered.extend(fetch_saved(cl, amount=settings.max_items_per_poll))
     dm_shares, dm_texts = fetch_dm_inbox(cl)
-    process_verification_texts(db, dm_texts)
+    process_verification_texts(db, dm_texts, bot=bot)
     discovered.extend(dm_shares)
     return ingest_discovered(db, queue, discovered[: settings.max_items_per_poll])
+
+
+def poll_all_accounts(db: Session, queue: JobQueue, pool: BotClientPool) -> int:
+    """One sweep over the .env account plus every ACTIVE pooled bot.
+
+    Each account fails independently: a challenge on one bot marks that row
+    CHALLENGE (admins reactivate it from the dashboard) without stopping the
+    others. The .env account is skipped if it's also registered as a bot row.
+    """
+    settings = get_settings()
+    bots = active_bots(db)
+    bot_usernames = {b.username.lower() for b in bots}
+    total = 0
+    errors: list[str] = []
+
+    env_configured = bool(settings.ig_sessionid or (settings.ig_username and settings.ig_password))
+    if env_configured and settings.ig_username.lower() not in bot_usernames:
+        total += poll_once(db, queue, pool.get(None))
+
+    for bot in bots:
+        try:
+            total += poll_once(db, queue, pool.get(bot), bot=bot)
+            bot.last_poll_at = datetime.now(UTC)
+            bot.last_error = None
+            db.commit()
+        except InstagramChallengeError as exc:
+            logger.error("bot %s challenge required: %s", bot.username, exc)
+            bot.status = BotStatus.CHALLENGE
+            bot.last_error = str(exc)
+            db.commit()
+            pool.drop(bot)
+        except Exception as exc:
+            logger.exception("bot %s poll failed", bot.username)
+            bot.last_error = f"{type(exc).__name__}: {exc}"
+            db.commit()
+            pool.drop(bot)
+            errors.append(f"{bot.username}: {exc}")
+
+    if not env_configured and not bots:
+        raise InstagramChallengeError(
+            "No Instagram accounts configured: set IG_SESSIONID in .env or add a bot account "
+            "in the admin panel"
+        )
+    if errors:
+        raise RuntimeError("; ".join(errors)[:500])
+    return total
 
 
 def run_forever() -> None:
@@ -141,7 +196,7 @@ def run_forever() -> None:
     settings = get_settings()
     factory = get_session_factory()
     queue = RedisQueue()
-    cl = None
+    pool = BotClientPool()
 
     while True:
         with factory() as db:
@@ -151,9 +206,7 @@ def run_forever() -> None:
                 time.sleep(15)
                 continue
             try:
-                if cl is None:
-                    cl = build_client()
-                new = poll_once(db, queue, cl)
+                new = poll_all_accounts(db, queue, pool)
                 set_state(
                     db,
                     POLLER_KEY,
@@ -166,7 +219,7 @@ def run_forever() -> None:
                 )
             except InstagramChallengeError as exc:
                 logger.error("instagram challenge required: %s", exc)
-                cl = None
+                pool.drop(None)
                 set_state(
                     db,
                     POLLER_KEY,

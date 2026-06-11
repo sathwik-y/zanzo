@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from recall.db import get_session_factory
-from recall.instagram.client import build_client
+from recall.instagram.bots import BotClientPool
 from recall.models import Engagement, EngagementChannel, EngagementStatus, SavedItem
 from recall.state import get_engagement_config
 
@@ -191,6 +191,21 @@ class IgEngagementClient:
         return [parse_thread_item(it) for it in items]
 
 
+class EngagementClientPool:
+    """Resolves the IgEngagementClient for an item owner's assigned bot."""
+
+    def __init__(self):
+        self._bots = BotClientPool()
+        self._wrapped: dict[int, IgEngagementClient] = {}
+
+    def for_user(self, db: Session, user_id) -> IgEngagementClient:
+        raw = self._bots.for_user(db, user_id)
+        key = id(raw)
+        if key not in self._wrapped:
+            self._wrapped[key] = IgEngagementClient(raw)
+        return self._wrapped[key]
+
+
 def _today_count(db: Session, column, now: datetime) -> int:
     day_ago = now - timedelta(days=1)
     return (
@@ -232,16 +247,23 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
 
     for eng in rows:
         try:
+            # Pool mode: act through the bot assigned to the item's owner, so
+            # the account that received the reel is the one that engages.
+            if isinstance(client, EngagementClientPool):
+                item = db.get(SavedItem, eng.item_id)
+                cl = client.for_user(db, item.user_id if item else None)
+            else:
+                cl = client
             if eng.status in (EngagementStatus.PENDING, EngagementStatus.FOLLOWING):
                 # follow (if required), then comment - both gated by caps
                 if eng.needs_follow and eng.status == EngagementStatus.PENDING:
                     if comments_today >= config["daily_comment_cap"]:
                         summary["deferred"] += 1
                         continue
-                    uid = eng.creator_user_id or client.user_id(eng.creator_username)
+                    uid = eng.creator_user_id or cl.user_id(eng.creator_username)
                     eng.creator_user_id = uid
                     _jitter_sleep(config, sleeper)
-                    client.follow(uid)
+                    cl.follow(uid)
                     eng.status = EngagementStatus.FOLLOWING
                     follows_today += 1
                     summary["followed"] += 1
@@ -251,7 +273,7 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
                     summary["deferred"] += 1
                     continue
                 _jitter_sleep(config, sleeper)
-                client.comment(eng.media_pk, eng.keyword)
+                cl.comment(eng.media_pk, eng.keyword)
                 eng.commented_at = now
                 eng.status = EngagementStatus.AWAITING_REPLY
                 comments_today += 1
@@ -259,10 +281,10 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
                 db.commit()
 
             elif eng.status in (EngagementStatus.AWAITING_REPLY, EngagementStatus.DM_SENT):
-                uid = eng.creator_user_id or client.user_id(eng.creator_username)
+                uid = eng.creator_user_id or cl.user_id(eng.creator_username)
                 eng.creator_user_id = uid
                 since = eng.commented_at
-                messages = client.creator_messages(uid)
+                messages = cl.creator_messages(uid)
                 resources = harvest_links_from_messages(messages, since)
                 if resources:
                     item = db.get(SavedItem, eng.item_id)
@@ -308,7 +330,7 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
                         summary["deferred"] += 1
                         continue
                     _jitter_sleep(config, sleeper)
-                    client.dm(uid, eng.keyword)
+                    cl.dm(uid, eng.keyword)
                     eng.dm_sent_at = now
                     eng.status = EngagementStatus.DM_SENT
                     dms_today += 1
@@ -342,7 +364,7 @@ def run_forever(poll_interval_s: int = 60) -> None:
                     time.sleep(poll_interval_s)
                     continue
                 if client is None:
-                    client = IgEngagementClient(build_client())
+                    client = EngagementClientPool()
                 summary = reconcile_once(db, client, config, datetime.now(UTC))
                 if any(summary.values()):
                     logger.info("engagement reconcile: %s", summary)

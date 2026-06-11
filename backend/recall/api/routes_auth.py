@@ -27,7 +27,8 @@ from recall.auth import (
     verify_password,
 )
 from recall.config import get_settings
-from recall.models import User, UserRole, utcnow
+from recall.instagram.bots import BotClientPool, pick_least_loaded_bot
+from recall.models import BotAccount, BotStatus, User, UserRole, utcnow
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -162,6 +163,21 @@ def _require_user(auth: AuthContext) -> User:
     return auth.user
 
 
+def _user_bot(db: Session, user: User) -> BotAccount | None:
+    if user.bot_account_id:
+        bot = db.get(BotAccount, user.bot_account_id)
+        if bot and bot.status == BotStatus.ACTIVE:
+            return bot
+    return None
+
+
+def _bot_username(db: Session, user: User) -> str | None:
+    bot = _user_bot(db, user)
+    if bot:
+        return bot.username
+    return get_settings().ig_username or None
+
+
 @router.get("/instagram/link", response_model=IgLinkStatus)
 def ig_link_status(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
     user = _require_user(auth)
@@ -177,7 +193,7 @@ def ig_link_status(auth: AuthContext = Depends(get_auth), db: Session = Depends(
         ig_verified=user.ig_verified,
         pending_code=pending,
         code_expires_at=user.ig_verification_expires_at if pending else None,
-        bot_username=get_settings().ig_username or None,
+        bot_username=_bot_username(db, user),
     )
 
 
@@ -192,7 +208,46 @@ def ig_link(body: IgLinkRequest, auth: AuthContext = Depends(get_auth), db: Sess
     user.ig_verification_expires_at = datetime.now(UTC) + timedelta(
         minutes=settings.ig_verification_ttl_minutes
     )
+    # Spread users across the bot pool: least-loaded ACTIVE bot at link time.
+    # (If they end up DMing a different bot, verification re-binds to that one.)
+    if _user_bot(db, user) is None:
+        bot = pick_least_loaded_bot(db)
+        user.bot_account_id = bot.id if bot else None
     db.commit()
+    return ig_link_status(auth, db)
+
+
+# One client pool for the on-demand verification check below. Only the user's
+# own bot inbox is read, and only when they click "check now".
+_verify_pool = BotClientPool()
+
+
+@router.post("/instagram/verify-now", response_model=IgLinkStatus)
+def ig_verify_now(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
+    """Immediate inbox sweep after the user says they've sent the code —
+    no waiting for the next poll cycle."""
+    from recall.instagram.client import InstagramChallengeError
+    from recall.instagram.dms import fetch_dm_inbox
+    from recall.services.poller import process_verification_texts
+
+    user = _require_user(auth)
+    if user.ig_verified or not user.ig_verification_code:
+        return ig_link_status(auth, db)
+
+    bot = _user_bot(db, user)
+    try:
+        cl = _verify_pool.get(bot)
+        _, texts = fetch_dm_inbox(cl)
+    except InstagramChallengeError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"bot account needs attention: {exc}"
+        ) from exc
+    except Exception as exc:
+        _verify_pool.drop(bot)
+        raise HTTPException(status_code=502, detail="could not reach Instagram") from exc
+
+    process_verification_texts(db, texts, bot=bot)
+    db.refresh(user)
     return ig_link_status(auth, db)
 
 
