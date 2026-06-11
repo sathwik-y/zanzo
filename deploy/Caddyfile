@@ -1,12 +1,16 @@
 # Production TLS edge. Caddy provisions Let's Encrypt certificates
-# automatically — just point the DNS A records at the instance first.
+# automatically — just point the DNS A record at the instance first.
+#
+# One domain serves both the API and presigned media: boto3 signs path-style
+# URLs (/<bucket>/<key>), so /recall-media/* routes to MinIO and everything
+# else to the API. Set S3_PUBLIC_ENDPOINT_URL=https://$API_DOMAIN in .env.
 
 {$API_DOMAIN} {
-	reverse_proxy api:8000
-}
-
-# Presigned media URLs (thumbnails, videos) must be browser-reachable:
-# set S3_PUBLIC_ENDPOINT_URL=https://{$MEDIA_DOMAIN} in .env.
-{$MEDIA_DOMAIN} {
-	reverse_proxy minio:9000
+	@media path /recall-media/*
+	handle @media {
+		reverse_proxy minio:9000
+	}
+	handle {
+		reverse_proxy api:8000
+	}
 }
