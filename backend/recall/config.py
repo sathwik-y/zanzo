@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     allow_signup: bool = True
     ig_verification_ttl_minutes: int = 30
 
+    # Browser origin of the dashboard, for CORS (only needed if something
+    # calls the API directly from the browser; the Next proxy path doesn't).
+    frontend_origin: str = "http://localhost:3000"
+
     # Fixture mode (no external calls; used by tests and credential-less demo)
     recall_fake_instagram: bool = False
     recall_fake_gemini: bool = False

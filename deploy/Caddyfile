@@ -1,0 +1,12 @@
+# Production TLS edge. Caddy provisions Let's Encrypt certificates
+# automatically — just point the DNS A records at the instance first.
+
+{$API_DOMAIN} {
+	reverse_proxy api:8000
+}
+
+# Presigned media URLs (thumbnails, videos) must be browser-reachable:
+# set S3_PUBLIC_ENDPOINT_URL=https://{$MEDIA_DOMAIN} in .env.
+{$MEDIA_DOMAIN} {
+	reverse_proxy minio:9000
+}

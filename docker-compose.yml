@@ -1,12 +1,13 @@
 services:
   postgres:
+    restart: unless-stopped
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: recall
       POSTGRES_PASSWORD: recall
       POSTGRES_DB: recall
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -16,9 +17,10 @@ services:
       retries: 10
 
   redis:
+    restart: unless-stopped
     image: redis:7-alpine
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -26,14 +28,15 @@ services:
       retries: 10
 
   minio:
+    restart: unless-stopped
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: recall
       MINIO_ROOT_PASSWORD: recall-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
     healthcheck:
@@ -43,10 +46,11 @@ services:
       retries: 10
 
   api:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: uvicorn recall.api.main:app --host 0.0.0.0 --port 8000
+    command: sh -c "alembic upgrade head && uvicorn recall.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=*"
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://recall:recall@postgres:5432/recall
@@ -54,7 +58,7 @@ services:
       S3_ENDPOINT_URL: http://minio:9000
       S3_PUBLIC_ENDPOINT_URL: http://localhost:9000
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,6 +69,7 @@ services:
     profiles: ["app"]
 
   worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -88,6 +93,7 @@ services:
     profiles: ["app"]
 
   poller:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -107,6 +113,7 @@ services:
     profiles: ["app"]
 
   engagement:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -122,6 +129,24 @@ services:
         condition: service_healthy
     profiles: ["app"]
 
+  # TLS edge for production (profile "edge"): terminates HTTPS for the API
+  # domain and the media (MinIO) domain. Set API_DOMAIN / MEDIA_DOMAIN in .env.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-localhost}
+      MEDIA_DOMAIN: ${MEDIA_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on:
+      - api
+    profiles: ["edge"]
+
   # The dashboard lives in a separate repo: https://github.com/sathwik-y/zanzo-fe
   # Run it pointed at this backend (BACKEND_URL=http://localhost:8000).
 
@@ -129,3 +154,4 @@ volumes:
   pgdata:
   miniodata:
   whispermodels:
+  caddydata:

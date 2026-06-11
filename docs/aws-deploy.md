@@ -1,55 +1,103 @@
-# Deploying Recall to AWS
+# Deploying Zanzo on a single EC2 box
 
-Recall runs locally by default. This guide maps each local service to its AWS equivalent. Expected cost at personal volume: **$20–30/month**.
+The cheapest reliable setup: **one `t4g.small`** (2 vCPU / 2 GB, ARM) running the
+entire backend stack in Docker — Postgres, Redis, MinIO, API, worker, poller,
+engagement, and a Caddy TLS edge. The dashboard deploys separately (Vercel free
+tier) and talks to the API over HTTPS.
 
-## Service mapping
+```
+ app.yourdomain.com  ──▶ Vercel (zanzo-fe, BACKEND_URL=https://api.yourdomain.com)
+ api.yourdomain.com  ──▶ EC2: Caddy ──▶ api:8000
+ media.yourdomain.com ─▶ EC2: Caddy ──▶ minio:9000   (presigned media URLs)
+```
 
-| Local (docker-compose) | AWS | Notes |
-|---|---|---|
-| postgres (pgvector/pgvector:pg16) | RDS PostgreSQL 16, `db.t4g.micro` | Enable the `vector` extension (supported on RDS since PG15) |
-| minio | S3 bucket | Remove `S3_ENDPOINT_URL` from env; boto3 then targets real S3 |
-| redis | ElastiCache `cache.t4g.micro`, or keep Redis on the EC2 box | Or implement the two-method `JobQueue` interface over SQS |
-| api + worker + poller | One EC2 `t3.medium` running docker compose, or ECS | t3.medium handles polling + 2 workers + API comfortably |
-| frontend | Vercel free tier, or the same EC2 box | Set `BACKEND_URL` + `BACKEND_API_KEY` env on the deployment |
+## Cost
 
-## Steps (EC2 path, simplest)
-
-1. **RDS:** create a PostgreSQL 16 instance, `db.t4g.micro`, 20GB. Create database `recall`. Run `CREATE EXTENSION vector;` as admin (the migration also attempts it).
-2. **S3:** create a private bucket, e.g. `yourname-recall-media`. Create an IAM user with access limited to that bucket; note the keys.
-3. **EC2:** launch `t3.medium` (Amazon Linux 2023 or Ubuntu), install Docker + compose plugin. Clone the repo.
-4. **.env on the instance:**
-   ```
-   DATABASE_URL=postgresql+psycopg://recall:<password>@<rds-endpoint>:5432/recall
-   S3_ENDPOINT_URL=            # empty = real S3
-   S3_BUCKET=yourname-recall-media
-   S3_ACCESS_KEY=...
-   S3_SECRET_KEY=...
-   REDIS_URL=redis://redis:6379/0
-   API_KEY=<long random string>
-   ```
-5. **Run:** `docker compose --profile app up -d --build` (skip the postgres/minio services; point env at RDS/S3).
-6. **Migrate:** `docker compose run --rm api alembic upgrade head`
-7. **Frontend on Vercel:** import the `frontend/` directory, set `BACKEND_URL=https://<your-api-host>` and `BACKEND_API_KEY`. Put the API behind HTTPS (an ALB with ACM cert, or Caddy on the instance).
-
-## The poller and IP reputation
-
-Instagram flags datacenter IPs faster than residential ones. Two workable layouts:
-
-- **Hybrid (recommended):** API + worker + dashboard on AWS; run only the poller at home (`python -m recall.services.poller` with `DATABASE_URL`/`REDIS_URL` pointing at AWS, Redis port exposed via security group to your home IP only or through a WireGuard tunnel).
-- **All-AWS:** accept the elevated ban risk on the burner account. Keep the polling interval at 300s or higher.
-
-## Whisper on EC2
-
-`small` + int8 runs fine on t3.medium CPU (a 60s reel transcribes in roughly real time). The model (~460MB) downloads on first use into the `whispermodels` volume. If you process many reels, bump to `t3.large` or set `WHISPER_MODEL_SIZE=base`.
-
-## Cost breakdown (us-east-1, on-demand)
-
-| Item | $/month |
+| Item | Monthly |
 |---|---|
-| EC2 t3.medium | ~$30 (or ~$18 with savings plan; t3.small ~$15 works if you drop a worker) |
-| RDS db.t4g.micro | ~$12 |
-| S3 (10GB media) | <$1 |
-| Gemini API (~200 items/mo) | $1–3 |
-| **Total** | **~$25–45** depending on instance choices |
+| t4g.small on-demand (≈$0.0112/h, region-dependent) | ~$8.50 |
+| 20 GB gp3 EBS | ~$1.60 |
+| Vercel hobby + Deepgram/Gemini free tiers | $0 |
+| **Total** | **~$10** |
 
-Going cheaper: a single `t3.small` running everything including Postgres in Docker (skip RDS) lands around $15/month, at the cost of managed backups.
+`t4g.small` is periodically **free-tier eligible** (750 h/mo trial) — check the
+launch wizard; if the badge is there, compute is $0 while the trial lasts.
+**Stretch credits further:** a stopped instance only pays for EBS (~$1.60/mo).
+Poller state lives in Postgres and IG sessions persist to disk, so
+stop/start is safe — run the box only when you need it.
+
+## Launch
+
+1. **Instance:** Amazon Linux 2023 (**64-bit Arm**), `t4g.small`, 20 GB gp3.
+   Security group: inbound 22 (your IP only), 80, 443. Nothing else — Postgres,
+   Redis, MinIO and the raw API bind to loopback inside the box.
+2. **DNS:** A records for `api.` and `media.` pointing at the instance's public
+   IP. (Do this before starting Caddy so certificate provisioning succeeds.)
+3. **Base setup** (as `ec2-user`):
+
+```bash
+# swap: 2 GB of headroom so a busy worker never OOMs the box
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# docker
+sudo dnf install -y docker git
+sudo systemctl enable --now docker
+sudo usermod -aG docker ec2-user   # re-login after this
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose --create-dirs && \
+  sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+git clone https://github.com/sathwik-y/zanzo.git && cd zanzo
+cp .env.example .env
+```
+
+4. **`.env` essentials for production:**
+
+```ini
+IG_SESSIONID=...                  # or manage bots from the admin panel instead
+GEMINI_API_KEY=...
+DEEPGRAM_API_KEY=...              # strongly recommended on a 2 GB box (skips local Whisper)
+API_KEY=<openssl rand -hex 32>    # service key — must not stay "change-me"
+JWT_SECRET=<openssl rand -hex 32>
+ADMIN_EMAILS=you@example.com
+API_DOMAIN=api.yourdomain.com
+MEDIA_DOMAIN=media.yourdomain.com
+S3_PUBLIC_ENDPOINT_URL=https://media.yourdomain.com
+FRONTEND_ORIGIN=https://app.yourdomain.com
+```
+
+5. **Start everything** (migrations run automatically before the API):
+
+```bash
+docker compose --profile app --profile edge up -d --build
+docker compose logs -f api   # watch for "Application startup complete"
+```
+
+6. **Dashboard:** import `zanzo-fe` into Vercel, set one env var —
+   `BACKEND_URL=https://api.yourdomain.com` — and assign `app.yourdomain.com`.
+
+7. **First account:** sign up with an email in `ADMIN_EMAILS` → you're admin.
+   Add bot accounts (or rely on the `.env` one), link your Instagram, done.
+
+## Operations
+
+- **Update:** `git pull && docker compose --profile app --profile edge up -d --build`
+- **Backup:** `docker compose exec postgres pg_dump -U recall recall | gzip > backup.sql.gz`
+  (cron it and copy off-box; media in MinIO is re-fetchable but the DB isn't)
+- **Stop when idle:** `docker compose stop` + stop the instance from the console.
+  On start, services come back automatically (`restart: unless-stopped`).
+- **Bot challenges:** the admin panel shows per-bot status; paste a fresh
+  `sessionid` to reactivate a challenged bot.
+
+## Caveats
+
+- **Datacenter IP:** Instagram flags cloud IPs faster than residential ones.
+  Keep the poll interval conservative and engagement caps low, especially the
+  first weeks. The lowest-risk option remains running the poller at home and
+  everything else on EC2 (`DATABASE_URL`/`REDIS_URL` over an SSH tunnel).
+- **2 GB is sized for Deepgram transcription.** If you must run local Whisper,
+  use `WHISPER_MODEL_SIZE=tiny` or move to a 4 GB instance (`t4g.medium`).
+- **Spot instances:** not recommended here — the DB lives on the box, and a
+  spot reclaim takes your archive down until you manually relaunch.
