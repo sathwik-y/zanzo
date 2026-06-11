@@ -36,3 +36,5 @@ docs/superpowers/
 
 # Frontend lives in its own repo (sathwik-y/zanzo-fe)
 /frontend/
+theme-previews/
+.firecrawl/
