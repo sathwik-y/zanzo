@@ -1,6 +1,6 @@
 # Zanzo — Backend Technical Documentation
 
-> **Zanzo (残像)** — "afterimage": the image that lingers after the thing is gone. Zanzo watches your Instagram saves and the reels you DM to a bot account, transcribes them, classifies them, extracts structured data per category, and serves it through a searchable API. This document covers the **backend** end to end. The dashboard is a separate repo: [sathwik-y/zanzo-fe](https://github.com/sathwik-y/zanzo-fe) (see its `TECH-DOC.md`).
+> **Zanzo** — "afterimage": the image that lingers after the thing is gone. Zanzo watches your Instagram saves and the reels you DM to a bot account, transcribes them, classifies them, extracts structured data per category, and serves it through a searchable API. This document covers the **backend** end to end. The dashboard is a separate repo: [sathwik-y/zanzo-fe](https://github.com/sathwik-y/zanzo-fe) (see its `TECH-DOC.md`).
 
 ---
 

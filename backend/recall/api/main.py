@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from recall.api import routes_actions, routes_admin, routes_items
+from recall.api import routes_actions, routes_admin, routes_auth, routes_items
 
 
 def create_app() -> FastAPI:
@@ -17,6 +17,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(routes_auth.router)
     app.include_router(routes_items.router)
     app.include_router(routes_admin.router)
     app.include_router(routes_actions.router)

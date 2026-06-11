@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from recall.api.deps import get_ai, get_db, get_storage, require_api_key
+from recall.api.deps import AuthContext, get_ai, get_auth, get_db, get_storage, scoped_items
 from recall.api.schemas import (
     ArchiveRequest,
     EngagementInfo,
@@ -22,7 +22,7 @@ from recall.models import Engagement, ItemStatus, MediaKind, SavedItem
 from recall.pipeline.ai_stages import make_embed_stage, make_extract_stage
 from recall.queueing import RedisQueue
 
-router = APIRouter(prefix="/items", tags=["items"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/items", tags=["items"])
 
 
 def _thumb_url(item: SavedItem, storage) -> str | None:
@@ -40,6 +40,7 @@ def _summary(item: SavedItem, storage, match_reason: str | None = None) -> ItemS
 
 
 def _base_query(
+    auth: AuthContext,
     category: str | None,
     status: str | None,
     source: str | None,
@@ -47,7 +48,7 @@ def _base_query(
     date_from: datetime | None,
     date_to: datetime | None,
 ):
-    q = select(SavedItem).where(SavedItem.archived == archived)
+    q = scoped_items(select(SavedItem).where(SavedItem.archived == archived), auth)
     if category:
         q = q.where(SavedItem.category == category.upper())
     if status:
@@ -78,8 +79,9 @@ def list_items(
     db: Session = Depends(get_db),
     storage=Depends(get_storage),
     ai=Depends(get_ai),
+    auth: AuthContext = Depends(get_auth),
 ):
-    base = _base_query(category, status, source, archived, date_from, date_to)
+    base = _base_query(auth, category, status, source, archived, date_from, date_to)
 
     if search and search.strip():
         results = hybrid_search(db, ai, search.strip(), base, limit=limit)
@@ -95,16 +97,21 @@ def list_items(
     )
 
 
-def _get_item(db: Session, item_id: uuid.UUID) -> SavedItem:
-    item = db.get(SavedItem, item_id)
+def _get_item(db: Session, item_id: uuid.UUID, auth: AuthContext) -> SavedItem:
+    item = db.scalar(scoped_items(select(SavedItem).where(SavedItem.id == item_id), auth))
     if item is None:
         raise HTTPException(status_code=404, detail="item not found")
     return item
 
 
 @router.get("/{item_id}", response_model=ItemDetail)
-def get_item(item_id: uuid.UUID, db: Session = Depends(get_db), storage=Depends(get_storage)):
-    item = _get_item(db, item_id)
+def get_item(
+    item_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage),
+    auth: AuthContext = Depends(get_auth),
+):
+    item = _get_item(db, item_id, auth)
     detail = ItemDetail.model_validate(item)
     detail.thumbnail_url = _thumb_url(item, storage)
     detail.media = [
@@ -118,8 +125,13 @@ def get_item(item_id: uuid.UUID, db: Session = Depends(get_db), storage=Depends(
 
 
 @router.get("/{item_id}/media")
-def get_item_media(item_id: uuid.UUID, db: Session = Depends(get_db), storage=Depends(get_storage)):
-    item = _get_item(db, item_id)
+def get_item_media(
+    item_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage),
+    auth: AuthContext = Depends(get_auth),
+):
+    item = _get_item(db, item_id, auth)
     return [
         MediaItem(kind=r.media_kind, url=storage.presigned_url(r.s3_key), bytes=r.bytes)
         for r in item.media_refs
@@ -133,9 +145,10 @@ def recategorize(
     db: Session = Depends(get_db),
     storage=Depends(get_storage),
     ai=Depends(get_ai),
+    auth: AuthContext = Depends(get_auth),
 ):
     """Manual category override; re-runs extraction and embedding inline."""
-    item = _get_item(db, item_id)
+    item = _get_item(db, item_id, auth)
     item.category = Category(body.category).value
     item.category_confidence = 1.0  # human said so
     db.commit()
@@ -145,12 +158,16 @@ def recategorize(
     item.status = ItemStatus.COMPLETED
     item.error_log = None
     db.commit()
-    return get_item(item_id, db, storage)
+    return get_item(item_id, db, storage, auth)
 
 
 @router.post("/{item_id}/retry", status_code=202)
-def retry(item_id: uuid.UUID, db: Session = Depends(get_db)):
-    item = _get_item(db, item_id)
+def retry(
+    item_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth),
+):
+    item = _get_item(db, item_id, auth)
     item.status = ItemStatus.PENDING
     item.error_log = None
     db.commit()
@@ -164,16 +181,21 @@ def set_archived(
     body: ArchiveRequest,
     db: Session = Depends(get_db),
     storage=Depends(get_storage),
+    auth: AuthContext = Depends(get_auth),
 ):
-    item = _get_item(db, item_id)
+    item = _get_item(db, item_id, auth)
     item.archived = body.archived
     db.commit()
     return _summary(item, storage)
 
 
 @router.delete("/{item_id}", status_code=204)
-def delete_item(item_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_item(
+    item_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth),
+):
     """Removes the item from the index. Does NOT unsave it on Instagram."""
-    item = _get_item(db, item_id)
+    item = _get_item(db, item_id, auth)
     db.delete(item)
     db.commit()

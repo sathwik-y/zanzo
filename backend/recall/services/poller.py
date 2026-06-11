@@ -5,6 +5,7 @@ Run with: python -m recall.services.poller
 import logging
 import random
 import time
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -13,33 +14,57 @@ from sqlalchemy.orm import Session
 from recall.config import get_settings
 from recall.db import get_session_factory
 from recall.instagram.client import InstagramChallengeError, build_client
-from recall.instagram.dms import fetch_dm_shares
+from recall.instagram.dms import fetch_dm_inbox
 from recall.instagram.saved import fetch_saved
-from recall.instagram.types import DiscoveredMedia
-from recall.models import ItemStatus, SavedItem
+from recall.instagram.types import DiscoveredMedia, DmText
+from recall.models import ItemStatus, SavedItem, User
 from recall.queueing import JobQueue, RedisQueue
 from recall.state import POLLER_KEY, get_state, set_state
 
 logger = logging.getLogger(__name__)
 
 
+def _resolve_owner(db: Session, d: DiscoveredMedia) -> uuid.UUID | None:
+    """DM shares belong to the verified user whose ig_user_pk matches the sender.
+
+    Saved-collection items and DMs from unlinked accounts stay unassigned
+    (user_id NULL) — visible to admins only.
+    """
+    if d.source != "DM" or not d.dm_sender_pk:
+        return None
+    user = db.scalar(
+        select(User).where(User.ig_user_pk == d.dm_sender_pk, User.ig_verified.is_(True))
+    )
+    return user.id if user else None
+
+
 def ingest_discovered(db: Session, queue: JobQueue, discovered: list[DiscoveredMedia]) -> int:
     """Insert PENDING rows for unseen media and enqueue jobs. Returns new-item count."""
     if not discovered:
         return 0
-    # Dedup within the batch (an item can be both saved and DMed; first wins)
-    by_pk: dict[str, DiscoveredMedia] = {}
+    # Dedup within the batch per (owner, media_pk): the same reel DMed by two
+    # different users is two items; an item both saved and DMed (same owner)
+    # keeps the first occurrence.
+    by_key: dict[tuple[uuid.UUID | None, str], DiscoveredMedia] = {}
+    owners: dict[tuple[uuid.UUID | None, str], uuid.UUID | None] = {}
     for d in discovered:
-        by_pk.setdefault(d.media_pk, d)
+        owner = _resolve_owner(db, d)
+        key = (owner, d.media_pk)
+        by_key.setdefault(key, d)
+        owners.setdefault(key, owner)
 
-    existing = set(
-        db.scalars(
-            select(SavedItem.media_pk).where(SavedItem.media_pk.in_(by_pk.keys()))
-        ).all()
-    )
-    new_items = [d for pk, d in by_pk.items() if pk not in existing]
-    for d in new_items:
+    existing = {
+        (uid, pk)
+        for uid, pk in db.execute(
+            select(SavedItem.user_id, SavedItem.media_pk).where(
+                SavedItem.media_pk.in_({pk for _, pk in by_key})
+            )
+        )
+    }
+    new_items = [(key, d) for key, d in by_key.items() if key not in existing]
+    for key, d in new_items:
         item = SavedItem(
+            user_id=owners[key],
             media_pk=d.media_pk,
             media_type=d.media_type,
             source=d.source,
@@ -54,16 +79,60 @@ def ingest_discovered(db: Session, queue: JobQueue, discovered: list[DiscoveredM
         db.add(item)
         db.flush()
         queue.enqueue(str(item.id))
-        logger.info("new item %s (%s, %s)", d.media_pk, d.source, d.media_type)
+        logger.info(
+            "new item %s (%s, %s, owner=%s)", d.media_pk, d.source, d.media_type, owners[key]
+        )
     db.commit()
     return len(new_items)
+
+
+def process_verification_texts(db: Session, texts: list[DmText]) -> int:
+    """Match DMed verification codes to pending account links. Returns matches."""
+    if not texts:
+        return 0
+    now = datetime.now(UTC)
+    pending = db.scalars(
+        select(User).where(
+            User.ig_verification_code.is_not(None),
+            User.ig_verified.is_(False),
+            User.ig_verification_expires_at > now,
+        )
+    ).all()
+    if not pending:
+        return 0
+
+    verified = 0
+    for text in texts:
+        normalized = text.text.upper()
+        for user in pending:
+            if user.ig_verification_code and user.ig_verification_code in normalized:
+                # The DM proves control of the sending account; bind its stable
+                # pk (handles later username changes) and the actual handle.
+                user.ig_user_pk = text.sender_pk
+                if text.sender_username:
+                    user.ig_username = text.sender_username.lower()
+                user.ig_verified = True
+                user.ig_verification_code = None
+                user.ig_verification_expires_at = None
+                verified += 1
+                logger.info(
+                    "instagram link verified for %s (ig=%s pk=%s)",
+                    user.email,
+                    user.ig_username,
+                    user.ig_user_pk,
+                )
+    if verified:
+        db.commit()
+    return verified
 
 
 def poll_once(db: Session, queue: JobQueue, cl) -> int:
     settings = get_settings()
     discovered: list[DiscoveredMedia] = []
     discovered.extend(fetch_saved(cl, amount=settings.max_items_per_poll))
-    discovered.extend(fetch_dm_shares(cl))
+    dm_shares, dm_texts = fetch_dm_inbox(cl)
+    process_verification_texts(db, dm_texts)
+    discovered.extend(dm_shares)
     return ingest_discovered(db, queue, discovered[: settings.max_items_per_poll])
 
 

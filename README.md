@@ -9,6 +9,7 @@ The reel scrolls past; the afterimage stays. Stop losing recipes, events and rec
 1. **Automatic ingestion, two ways.** A poller watches your Instagram saved collection via [instagrapi](https://github.com/subzeroid/instagrapi). You can also DM any reel to the bot account and it gets picked up the same way — no URL pasting, ever.
 2. **Category-aware AI extraction.** Every item is transcribed, then classified (Educational / Event / Recipe / Travel / Tech / Other) and run through a category-specific extractor. An event reel yields `starts_at`, `venue_name`, `ticket_url`; a recipe reel yields ingredients with quantities and ordered steps; a tech reel yields the actual commands shown. Not just tags — structured fields you can act on ("Add to calendar" generates an .ics from the extraction).
 3. **Self-hosted, your data.** Runs on your laptop or your AWS account. Postgres + pgvector for hybrid semantic search ("that tokyo ramen place" finds the reel even if the caption never says "ramen"). No subscription, no third-party cloud holding your saves.
+4. **Multi-user.** Full login/signup with JWT auth. Each user links their Instagram account (verified by DMing a one-time code to the bot), and from then on every reel they DM lands in *their* library only. Admins get an instance-wide panel: users, global stats, poller health, engagement caps.
 
 ### Beyond the basics
 
@@ -83,6 +84,13 @@ point it at this backend (`BACKEND_URL=http://localhost:8000`), and `npm run dev
 **Instagram login tip:** password login from a new device usually triggers a checkpoint. The reliable path is the `IG_SESSIONID` cookie: log into instagram.com in your browser as the bot account, open DevTools → Application → Cookies → copy `sessionid` into `.env`. The session persists to `data/ig.session.json` after that.
 
 Everything (API, worker, poller, dashboard) can also run fully in Docker: `docker compose --profile app up --build`.
+
+### Accounts, roles and Instagram linking
+
+- Sign up on the dashboard. The **first account** on an instance becomes admin automatically; emails in `ADMIN_EMAILS` are promoted too. Set `ALLOW_SIGNUP=false` to lock a personal instance afterwards.
+- To receive reels by DM, link your Instagram in **Settings**: enter your handle, get a code, DM `ZANZO <code>` to the bot account from your IG account. The poller binds your Instagram's stable numeric id — renaming your IG handle later won't break the mapping.
+- Items from the bot's own saved collection (and DMs from unlinked senders) are visible to admins only.
+- The `API_KEY` header (`X-API-Key`) still works as an unscoped *service* credential for scripts and ops.
 
 ### Try it without any credentials
 

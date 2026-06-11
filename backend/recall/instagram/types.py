@@ -14,3 +14,15 @@ class DiscoveredMedia:
     caption: str | None = None
     post_created_at: datetime | None = None
     saved_at: datetime | None = None
+    # DM-only: who shared it with the bot (stable numeric pk + handle at the time)
+    dm_sender_pk: str | None = None
+    dm_sender_username: str | None = None
+
+
+@dataclass
+class DmText:
+    """A plain text DM, used to match Instagram-account verification codes."""
+
+    sender_pk: str
+    sender_username: str | None
+    text: str

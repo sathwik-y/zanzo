@@ -2,17 +2,22 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from recall.api.deps import get_db, require_api_key
+from recall.api.deps import AuthContext, get_auth, get_db, scoped_items
 from recall.models import SavedItem
 
-router = APIRouter(prefix="/actions", tags=["actions"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/actions", tags=["actions"])
 
 
 @router.post("/event/{item_id}/add-to-calendar")
-def event_to_ics(item_id: uuid.UUID, db: Session = Depends(get_db)):
-    item = db.get(SavedItem, item_id)
+def event_to_ics(
+    item_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth),
+):
+    item = db.scalar(scoped_items(select(SavedItem).where(SavedItem.id == item_id), auth))
     if item is None:
         raise HTTPException(status_code=404, detail="item not found")
     if item.category != "EVENT" or item.extraction is None:

@@ -8,6 +8,11 @@ The reel permalink lives at item["xma_clip"][0]["target_url"], e.g.
   https://www.instagram.com/reel/DYz7y55zEon/?id=3905728284751317543_60605511491&...
 The numeric media_pk is the first segment of the `id` query parameter.
 
+Each parsed share also records who sent it (item["user_id"], resolved to a
+username via the thread participant list) so the poller can route the item to
+the right app user. Plain text messages are collected too — that's how users
+verify ownership of their Instagram account (they DM their verification code).
+
 Pending threads (from accounts the bot doesn't follow) are approved after
 parsing so later shares arrive in the normal inbox.
 """
@@ -17,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 from instagrapi import Client
 
-from recall.instagram.types import DiscoveredMedia
+from recall.instagram.types import DiscoveredMedia, DmText
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +37,51 @@ def _pk_from_target_url(target_url: str) -> str | None:
     return None
 
 
+def _thread_usernames(thread: dict) -> dict[str, str]:
+    """Participant pk → username for one raw thread dict."""
+    out: dict[str, str] = {}
+    for u in thread.get("users", []) or []:
+        pk = u.get("pk") or u.get("pk_id") or u.get("id")
+        if pk and u.get("username"):
+            out[str(pk)] = u["username"]
+    return out
+
+
 def parse_inbox_items(threads: list[dict]) -> list[DiscoveredMedia]:
     """Parse raw direct_v2 thread dicts into discovered media."""
     found: list[DiscoveredMedia] = []
     for thread in threads:
+        usernames = _thread_usernames(thread)
         for item in thread.get("items", []):
             media = _parse_item(item)
             if media:
+                sender_pk = item.get("user_id")
+                if sender_pk is not None:
+                    media.dm_sender_pk = str(sender_pk)
+                    media.dm_sender_username = usernames.get(str(sender_pk))
                 found.append(media)
     return found
+
+
+def parse_inbox_texts(threads: list[dict]) -> list[DmText]:
+    """Plain text DMs (for verification-code matching)."""
+    out: list[DmText] = []
+    for thread in threads:
+        usernames = _thread_usernames(thread)
+        for item in thread.get("items", []):
+            if item.get("item_type") != "text" or not item.get("text"):
+                continue
+            sender_pk = item.get("user_id")
+            if sender_pk is None:
+                continue
+            out.append(
+                DmText(
+                    sender_pk=str(sender_pk),
+                    sender_username=usernames.get(str(sender_pk)),
+                    text=item["text"],
+                )
+            )
+    return out
 
 
 def _parse_item(item: dict) -> DiscoveredMedia | None:
@@ -95,12 +136,15 @@ def _parse_item(item: dict) -> DiscoveredMedia | None:
     )
 
 
-def fetch_dm_shares(cl: Client, approve_pending: bool = True) -> list[DiscoveredMedia]:
-    found: list[DiscoveredMedia] = []
+def fetch_dm_inbox(
+    cl: Client, approve_pending: bool = True
+) -> tuple[list[DiscoveredMedia], list[DmText]]:
+    """One inbox sweep: shared media plus plain text messages."""
+    threads: list[dict] = []
 
     pending = cl.private_request("direct_v2/pending_inbox/", params={"limit": 20})
     pending_threads = pending.get("inbox", {}).get("threads", [])
-    found.extend(parse_inbox_items(pending_threads))
+    threads.extend(pending_threads)
     if approve_pending:
         for thread in pending_threads:
             thread_id = thread.get("thread_id")
@@ -111,7 +155,13 @@ def fetch_dm_shares(cl: Client, approve_pending: bool = True) -> list[Discovered
                     logger.exception("failed to approve pending thread %s", thread_id)
 
     inbox = cl.private_request("direct_v2/inbox/", params={"limit": 20, "thread_message_limit": 10})
-    found.extend(parse_inbox_items(inbox.get("inbox", {}).get("threads", [])))
+    threads.extend(inbox.get("inbox", {}).get("threads", []))
 
-    logger.info("dm shares discovered: %d", len(found))
-    return found
+    found = parse_inbox_items(threads)
+    texts = parse_inbox_texts(threads)
+    logger.info("dm shares discovered: %d (texts: %d)", len(found), len(texts))
+    return found, texts
+
+
+def fetch_dm_shares(cl: Client, approve_pending: bool = True) -> list[DiscoveredMedia]:
+    return fetch_dm_inbox(cl, approve_pending=approve_pending)[0]

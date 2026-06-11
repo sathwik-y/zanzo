@@ -19,6 +19,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -30,6 +31,37 @@ EMBEDDING_DIMS = 1536
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+class UserRole(StrEnum):
+    USER = "USER"
+    ADMIN = "ADMIN"
+
+
+class User(Base):
+    """An account on the hosted app. Items are scoped to their owner.
+
+    Instagram identity is bound by ig_user_pk (Instagram's stable numeric id),
+    captured when the user DMs their verification code to the bot account —
+    so an Instagram username change never breaks the mapping.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    display_name: Mapped[str | None] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(8), default=UserRole.USER)
+    ig_username: Mapped[str | None] = mapped_column(Text, index=True)
+    ig_user_pk: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
+    ig_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    ig_verification_code: Mapped[str | None] = mapped_column(String(16))
+    ig_verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    items: Mapped[list["SavedItem"]] = relationship(back_populates="user")
 
 
 class MediaType(StrEnum):
@@ -72,9 +104,18 @@ class MediaKind(StrEnum):
 
 class SavedItem(Base):
     __tablename__ = "saved_items"
+    # The same reel DMed by two different users is two rows; NULLS NOT DISTINCT
+    # keeps legacy/unassigned rows (user_id IS NULL) deduplicated too.
+    __table_args__ = (
+        UniqueConstraint("user_id", "media_pk", name="uq_saved_items_user_media",
+                         postgresql_nulls_not_distinct=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    media_pk: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    media_pk: Mapped[str] = mapped_column(Text, index=True)
     media_type: Mapped[str] = mapped_column(String(16), default=MediaType.REEL)
     source: Mapped[str] = mapped_column(String(8), default=ItemSource.SAVED)
     instagram_url: Mapped[str | None] = mapped_column(Text)
@@ -96,6 +137,7 @@ class SavedItem(Base):
     error_log: Mapped[dict | None] = mapped_column(JSONB)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    user: Mapped["User | None"] = relationship(back_populates="items")
     extraction: Mapped["Extraction | None"] = relationship(
         back_populates="item", uselist=False, cascade="all, delete-orphan"
     )

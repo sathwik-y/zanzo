@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # Auth (multi-user cloud mode)
+    jwt_secret: str = "change-me-in-production"
+    jwt_access_ttl_minutes: int = 30
+    jwt_refresh_ttl_days: int = 14
+    # Comma-separated emails auto-promoted to ADMIN on signup. The very first
+    # account ever created is also promoted (self-host bootstrap).
+    admin_emails: str = ""
+    allow_signup: bool = True
+    ig_verification_ttl_minutes: int = 30
+
     # Fixture mode (no external calls; used by tests and credential-less demo)
     recall_fake_instagram: bool = False
     recall_fake_gemini: bool = False
