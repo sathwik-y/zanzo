@@ -158,15 +158,62 @@ def engagement_list(limit: int = 50, db: Session = Depends(get_db)):
     return [EngagementRow.model_validate(r) for r in rows]
 
 
-@router.get("/resources", response_model=list[ResourceRow])
-def resources_list(db: Session = Depends(get_db), auth: AuthContext = Depends(get_auth)):
-    """Every auto-engagement and the resources harvested for it (Resources view)."""
+class ResourceListResponse(BaseModel):
+    rows: list[ResourceRow]
+    total: int
+    limit: int
+    offset: int
+
+
+_RESOURCE_STATUS_GROUPS = {
+    "harvested": ["RESOURCE_RECEIVED"],
+    "tap": ["INTERACTION_REQUIRED"],
+    "progress": ["PENDING", "FOLLOWING", "COMMENTED", "AWAITING_REPLY", "DM_SENT"],
+    "dead": ["EXHAUSTED", "FAILED"],
+}
+
+
+@router.get("/resources", response_model=ResourceListResponse)
+def resources_list(
+    search: str | None = None,
+    status: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_auth),
+):
+    """Auto-engagements and their harvested links — searchable and paged."""
+    from sqlalchemy import Text, cast, func, or_
+
+    from recall.models import Extraction
+
+    limit = max(1, min(limit, 100))
     visible_ids = select(scoped_items(select(SavedItem), auth).subquery().c.id)
-    rows = db.scalars(
+    q = (
         select(Engagement)
+        .join(SavedItem, SavedItem.id == Engagement.item_id)
+        .outerjoin(Extraction, Extraction.item_id == SavedItem.id)
         .where(Engagement.item_id.in_(visible_ids))
-        .order_by(Engagement.created_at.desc())
+    )
+    if status and status in _RESOURCE_STATUS_GROUPS:
+        q = q.where(Engagement.status.in_(_RESOURCE_STATUS_GROUPS[status]))
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        q = q.where(
+            or_(
+                SavedItem.caption.ilike(pattern),
+                Engagement.creator_username.ilike(pattern),
+                Engagement.keyword.ilike(pattern),
+                cast(Extraction.payload, Text).ilike(pattern),
+                cast(SavedItem.resources, Text).ilike(pattern),
+            )
+        )
+
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    rows = db.scalars(
+        q.order_by(Engagement.created_at.desc()).limit(limit).offset(offset)
     ).all()
+
     out: list[ResourceRow] = []
     for eng in rows:
         item = db.get(SavedItem, eng.item_id)
@@ -194,7 +241,7 @@ def resources_list(db: Session = Depends(get_db), auth: AuthContext = Depends(ge
                 last_error=eng.last_error,
             )
         )
-    return out
+    return ResourceListResponse(rows=out, total=total, limit=limit, offset=offset)
 
 
 class AdminUserRow(BaseModel):

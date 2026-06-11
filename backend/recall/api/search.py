@@ -46,6 +46,8 @@ def hybrid_search(
                     SavedItem.caption.ilike(pattern),
                     SavedItem.transcript.ilike(pattern),
                     cast(Extraction.payload, Text).ilike(pattern),
+                    # harvested resource links/notes are searchable from home too
+                    cast(SavedItem.resources, Text).ilike(pattern),
                 )
             )
             .limit(limit * 2)

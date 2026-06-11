@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theme 3 — Warm, contrast-tuned (current identity, fixed)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ——— SAME WARM HUES, BIGGER VALUE GAPS: darker bg, lifted cards, stronger lines ——— */
+  :root{
+    --bg:#0a0908; --surface:#181410; --raised:#221c15; --line:#352c20; --line-strong:#4a3e2c;
+    --ink:#f2ebdd; --dim:#b3a890; --faint:#7a705e;
+    --accent:#d18c4a; --accent-bright:#e0a76e;
+    --recipe:#cba45c; --travel:#94b08a; --event:#c97c5e; --tech:#7fa9a1; --edu:#8ca6c5; --other:#9c927f;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--ink);font:15px/1.5 Geist,sans-serif}
+  .mono{font-family:"Geist Mono",monospace;text-transform:uppercase;letter-spacing:.18em;font-size:.62rem}
+  .banner{padding:10px 24px;background:var(--surface);border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline}
+  .banner b{font-family:Fraunces,serif;font-size:1.05rem}
+  .banner span{color:var(--dim);font-size:.8rem}
+  .zone-label{padding:28px 24px 10px;color:var(--faint)}
+  .landing{padding:64px 24px;position:relative;overflow:hidden;border-block:1px solid var(--line)}
+  .landing::before{content:"";position:absolute;inset:0;background:radial-gradient(55% 60% at 80% 0%,rgba(192,118,58,.13),transparent 65%)}
+  .landing-in{max-width:880px;margin:auto;position:relative}
+  .eyebrow{color:#c0763a;margin-bottom:14px}
+  .landing h1{font-family:Fraunces,serif;font-weight:420;font-size:clamp(2.4rem,5vw,3.6rem);line-height:1.06}
+  .landing h1 em{color:var(--accent-bright)}
+  .landing p{color:var(--dim);max-width:46ch;margin-top:18px}
+  .cta{display:inline-block;margin-top:26px;padding:13px 38px;border-radius:999px;color:var(--ink);
+       box-shadow:inset 0 0 0 2px var(--line-strong);font-weight:700;font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;text-decoration:none}
+  .cta:hover{background:var(--ink);color:var(--bg)}
+  .app{display:flex;min-height:680px;border-top:1px solid var(--line)}
+  .rail{width:200px;border-right:1px solid var(--line);padding:16px 12px;flex-shrink:0}
+  .logo{display:flex;align-items:center;gap:10px;padding:4px 8px;margin-bottom:22px;font-family:Fraunces,serif;font-size:1.15rem}
+  .nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--dim);text-decoration:none;font-size:.86rem;margin-bottom:2px}
+  .nav a:hover{background:var(--raised);color:var(--ink)}
+  .nav a.active{background:rgba(209,140,74,.16);color:var(--accent-bright)}
+  .nav i{width:15px;height:15px;border:1.5px solid currentColor;border-radius:4px;display:inline-block;opacity:.8}
+  .main{flex:1;padding:30px 36px}
+  .pagehead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:24px}
+  .pagehead h2{font-family:Fraunces,serif;font-weight:450;font-size:1.7rem}
+  .pagehead p{color:var(--dim);font-size:.85rem;margin-top:3px}
+  .chip-sweep{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--surface);
+              border-radius:999px;padding:6px 13px;color:var(--dim)}
+  .chip-sweep b{color:var(--accent-bright);font-weight:500}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:26px}
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .mono{color:var(--faint)}
+  .stat b{display:block;font-size:1.25rem;font-weight:600;margin-top:4px}
+  .stat b.copper{color:var(--accent-bright)}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;transition:.15s}
+  .card:hover{border-color:var(--line-strong);transform:translateY(-1px)}
+  .thumb{height:120px} .t1{background:linear-gradient(160deg,#2e3a30,#181f1a)} .t2{background:linear-gradient(160deg,#3a3022,#1d1812)} .t3{background:linear-gradient(160deg,#332720,#1a1410)}
+  .cbody{padding:13px 14px 15px}
+  .cbody h4{font-size:.92rem;font-weight:600;line-height:1.35}
+  .cbody p{color:var(--dim);font-size:.78rem;margin-top:5px}
+  .chips{display:flex;gap:6px;margin-top:11px;flex-wrap:wrap}
+  .chip{font-size:.66rem;font-weight:500;padding:3px 9px;border-radius:999px;border:1px solid}
+  .recipe{color:var(--recipe);border-color:color-mix(in srgb,var(--recipe) 40%,transparent);background:color-mix(in srgb,var(--recipe) 12%,transparent)}
+  .travel{color:var(--travel);border-color:color-mix(in srgb,var(--travel) 40%,transparent);background:color-mix(in srgb,var(--travel) 12%,transparent)}
+  .tech{color:var(--tech);border-color:color-mix(in srgb,var(--tech) 40%,transparent);background:color-mix(in srgb,var(--tech) 12%,transparent)}
+  .src{color:var(--faint);border-color:var(--line)}
+  table{width:100%;border-collapse:collapse;font-size:.83rem;margin-top:8px}
+  th{text-align:left;color:var(--faint);font-weight:500;font-size:.7rem;padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid var(--line);color:var(--dim)}
+  td:first-child{color:var(--ink)}
+  .pill{font-size:.66rem;padding:2px 8px;border-radius:6px;background:rgba(209,140,74,.16);color:var(--accent-bright)}
+  .ok{color:var(--travel)}
+  .section{margin-top:30px}
+  .section h3{font-size:.95rem;font-weight:600;margin-bottom:4px}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-top:10px}
+</style>
+</head>
+<body>
+  <div class="banner"><b>Theme 3 · Warm, contrast-tuned</b><span>same archive identity — darker bg, lifted cards, stronger hairlines, brighter ink</span></div>
+
+  <p class="zone-label mono">landing (same identity)</p>
+  <section class="landing"><div class="landing-in">
+    <p class="eyebrow mono">Self-hosted Instagram archive</p>
+    <h1>Saved it. Never <em>lost it.</em></h1>
+    <p>Zanzo watches the reels you save or DM and turns each one into structured, searchable data. Not bookmarks. An archive that answers questions.</p>
+    <a class="cta" href="#">Get started</a>
+  </div></section>
+
+  <p class="zone-label mono">app interior (contrast fixed)</p>
+  <div class="app">
+    <aside class="rail">
+      <div class="logo"><svg width="20" height="20" viewBox="0 0 32 32" fill="none"><rect x="2.5" y="7.5" width="22" height="22" rx="6" stroke="#c0763a" stroke-width="2" opacity=".35"/><rect x="7.5" y="2.5" width="22" height="22" rx="6" stroke="#d18c4a" stroke-width="2.5"/><circle cx="18.5" cy="13.5" r="3" fill="#e0a76e"/></svg>zanzo</div>
+      <nav class="nav">
+        <a class="active" href="#"><i></i>Feed</a><a href="#"><i></i>Resources</a><a href="#"><i></i>Recipes</a><a href="#"><i></i>Travel</a><a href="#"><i></i>Tech</a><a href="#"><i></i>Settings</a><a href="#"><i></i>Admin</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <div class="pagehead">
+        <div><h2>Your saves</h2><p>Everything you saved or DMed, automatically organized.</p></div>
+        <span class="chip-sweep mono">⟳ next sweep <b>4:12</b></span>
+      </div>
+      <div class="stats">
+        <div class="stat"><span class="mono">items</span><b>128</b></div>
+        <div class="stat"><span class="mono">this week</span><b>14</b></div>
+        <div class="stat"><span class="mono">resources</span><b class="copper">23</b></div>
+        <div class="stat"><span class="mono">ai spend / mo</span><b>$0.41</b></div>
+      </div>
+      <div class="grid">
+        <div class="card"><div class="thumb t2"></div><div class="cbody">
+          <h4>Tonkotsu ramen broth, the 18-hour method</h4><p>9 ingredients · 6 steps · 25 min prep</p>
+          <div class="chips"><span class="chip recipe">Recipe</span><span class="chip src">via DM</span></div></div></div>
+        <div class="card"><div class="thumb t1"></div><div class="cbody">
+          <h4>Hidden onsen towns 2h from Tokyo</h4><p>5 places · best season: Nov–Feb</p>
+          <div class="chips"><span class="chip travel">Travel</span><span class="chip src">saved</span></div></div></div>
+        <div class="card"><div class="thumb t3"></div><div class="cbody">
+          <h4>Free Opus 4.8 inside VS Code, full setup</h4><p>4 commands · 1 extension · guide harvested</p>
+          <div class="chips"><span class="chip tech">Tech</span><span class="chip src">via DM</span></div></div></div>
+      </div>
+      <div class="section"><h3>Admin · Users</h3>
+        <div class="panel"><table>
+          <tr><th>EMAIL</th><th>ROLE</th><th>INSTAGRAM</th><th>BOT</th><th>ITEMS</th></tr>
+          <tr><td>sathwik.yellapragada@gmail.com</td><td><span class="pill">admin</span></td><td class="ok">@_za.warudo__ ✓</td><td>@gigareincarnation</td><td>96</td></tr>
+          <tr><td>friend@example.com</td><td>user</td><td class="ok">@friend.ig ✓</td><td>@zanzo.bot2</td><td>32</td></tr>
+        </table></div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
