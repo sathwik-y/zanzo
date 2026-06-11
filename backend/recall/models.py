@@ -150,6 +150,9 @@ class SavedItem(Base):
     media_pk: Mapped[str] = mapped_column(Text, index=True)
     media_type: Mapped[str] = mapped_column(String(16), default=MediaType.REEL)
     source: Mapped[str] = mapped_column(String(8), default=ItemSource.SAVED)
+    # Who DMed it to the bot (stable numeric pk). Lets a later-verified user
+    # *claim* items that arrived before they linked, instead of re-ingesting.
+    dm_sender_pk: Mapped[str | None] = mapped_column(Text, index=True)
     instagram_url: Mapped[str | None] = mapped_column(Text)
     author_username: Mapped[str | None] = mapped_column(Text)
     author_full_name: Mapped[str | None] = mapped_column(Text)

@@ -75,6 +75,31 @@ def queue_engagement(db: Session, item: SavedItem, spec: CtaSpec) -> Engagement 
     existing = db.scalar(select(Engagement).where(Engagement.item_id == item.id))
     if existing:
         return existing  # already queued/handled
+
+    # The same post may exist as another user's item (or a re-ingested copy).
+    # The bot must never follow/comment twice on one post: reuse the earlier
+    # engagement's outcome instead of acting again.
+    sibling = db.scalar(
+        select(Engagement)
+        .where(Engagement.media_pk == item.media_pk, Engagement.item_id != item.id)
+        .order_by(Engagement.created_at)
+    )
+    if sibling is not None:
+        sibling_item = db.get(SavedItem, sibling.item_id)
+        if sibling_item is not None and sibling_item.resources:
+            existing_urls = {r.get("url") for r in (item.resources or [])}
+            item.resources = (item.resources or []) + [
+                r for r in sibling_item.resources if r.get("url") not in existing_urls
+            ]
+            db.commit()
+        logger.info(
+            "skipping engagement for %s: post already engaged (engagement %s, status %s)",
+            item.media_pk,
+            sibling.id,
+            sibling.status,
+        )
+        return None
+
     eng = Engagement(
         item_id=item.id,
         creator_username=item.author_username,

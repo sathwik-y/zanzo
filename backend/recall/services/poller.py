@@ -69,6 +69,7 @@ def ingest_discovered(db: Session, queue: JobQueue, discovered: list[DiscoveredM
             media_pk=d.media_pk,
             media_type=d.media_type,
             source=d.source,
+            dm_sender_pk=d.dm_sender_pk,
             instagram_url=d.instagram_url,
             author_username=d.author_username,
             author_full_name=d.author_full_name,
@@ -115,6 +116,21 @@ def process_verification_texts(
             if user.ig_verification_code and user.ig_verification_code in normalized:
                 # The DM proves control of the sending account; bind its stable
                 # pk (handles later username changes) and the actual handle.
+                # If another app account held this Instagram identity (e.g. a
+                # re-signup), release it there — current control wins.
+                previous = db.scalar(
+                    select(User).where(User.ig_user_pk == text.sender_pk, User.id != user.id)
+                )
+                if previous is not None:
+                    previous.ig_user_pk = None
+                    previous.ig_verified = False
+                    db.flush()  # release the unique pk before re-assigning it
+                    logger.info(
+                        "instagram identity %s moved from %s to %s",
+                        text.sender_pk,
+                        previous.email,
+                        user.email,
+                    )
                 user.ig_user_pk = text.sender_pk
                 if text.sender_username:
                     user.ig_username = text.sender_username.lower()
@@ -123,6 +139,9 @@ def process_verification_texts(
                 user.ig_verification_expires_at = None
                 if bot is not None:
                     user.bot_account_id = bot.id
+                claimed = claim_unassigned_items(db, user)
+                if claimed:
+                    logger.info("claimed %d pre-existing items for %s", claimed, user.email)
                 verified += 1
                 logger.info(
                     "instagram link verified for %s (ig=%s pk=%s)",
@@ -133,6 +152,30 @@ def process_verification_texts(
     if verified:
         db.commit()
     return verified
+
+
+def claim_unassigned_items(db: Session, user: User) -> int:
+    """Hand unowned items that this user's Instagram DMed earlier to the user —
+    already-processed history transfers instead of being re-ingested."""
+    if not user.ig_user_pk:
+        return 0
+    orphans = db.scalars(
+        select(SavedItem).where(
+            SavedItem.user_id.is_(None), SavedItem.dm_sender_pk == user.ig_user_pk
+        )
+    ).all()
+    # Skip any that would collide with an item the user already has.
+    owned_pks = set(
+        db.scalars(select(SavedItem.media_pk).where(SavedItem.user_id == user.id)).all()
+    )
+    claimed = 0
+    for item in orphans:
+        if item.media_pk in owned_pks:
+            continue
+        item.user_id = user.id
+        owned_pks.add(item.media_pk)
+        claimed += 1
+    return claimed
 
 
 def poll_once(db: Session, queue: JobQueue, cl, bot: BotAccount | None = None) -> int:
