@@ -15,6 +15,7 @@ dependencies = [
     "instagrapi>=2.1",
     "yt-dlp>=2025.1.1",
     "faster-whisper>=1.1",
+    "deepgram-sdk>=7.0",
     "google-genai>=1.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
