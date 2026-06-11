@@ -111,6 +111,6 @@ python -m pytest        # 34 tests; DB tests need the docker services up
 python -m ruff check .
 ```
 
-## License
+## A personal project
 
-MIT. This is a personal project, not a service — PRs welcome, but there is no SLA and no support.
+This is a personal project, not a service — PRs welcome, but there is no SLA and no support.
