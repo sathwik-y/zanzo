@@ -56,7 +56,7 @@ services:
       DATABASE_URL: postgresql+psycopg://recall:recall@postgres:5432/recall
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -79,7 +79,7 @@ services:
       DATABASE_URL: postgresql+psycopg://recall:recall@postgres:5432/recall
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
     volumes:
       - ./data:/app/data
       - whispermodels:/root/.cache/huggingface
