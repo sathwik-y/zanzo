@@ -117,14 +117,17 @@ def test_poller_status_and_resume(client, auth):
 def test_engagement_config_get_and_update(client, auth):
     cfg = client.get("/engagement/config", headers=auth).json()
     assert cfg["enabled"] is True
-    assert cfg["daily_comment_cap"] == 8
+    assert cfg["daily_comment_cap"] == 4
+    # human-pacing knobs are exposed and tunable
+    assert cfg["hourly_action_cap"] == 2
+    assert cfg["min_action_gap_s"] == 900
     cfg["daily_comment_cap"] = 3
     cfg["enabled"] = False
     updated = client.put("/engagement/config", json=cfg, headers=auth).json()
     assert updated["daily_comment_cap"] == 3
     assert updated["enabled"] is False
     # restore default so other tests/live runs are unaffected
-    cfg["daily_comment_cap"] = 8
+    cfg["daily_comment_cap"] = 4
     cfg["enabled"] = True
     client.put("/engagement/config", json=cfg, headers=auth)
 

@@ -99,6 +99,8 @@ class EngagementConfig(BaseModel):
     daily_follow_cap: int
     daily_comment_cap: int
     daily_dm_cap: int
+    hourly_action_cap: int = 2
+    min_action_gap_s: int = 900
     min_delay_s: int
     max_delay_s: int
     dm_fallback_after_s: int

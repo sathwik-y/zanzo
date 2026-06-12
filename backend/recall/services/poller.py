@@ -20,6 +20,7 @@ from recall.instagram.saved import fetch_saved
 from recall.instagram.types import DiscoveredMedia, DmText
 from recall.models import BotAccount, BotStatus, ItemStatus, SavedItem, User
 from recall.queueing import JobQueue, RedisQueue
+from recall.schedule import in_quiet_hours
 from recall.state import POLLER_KEY, get_state, set_state
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,14 @@ def run_forever() -> None:
     pool = BotClientPool()
 
     while True:
+        if in_quiet_hours(
+            datetime.now(UTC),
+            settings.quiet_hours_start,
+            settings.quiet_hours_end,
+            settings.account_timezone,
+        ):
+            time.sleep(min(600, settings.poll_interval_seconds))
+            continue
         with factory() as db:
             status = get_state(db, POLLER_KEY).get("status", "running")
             if status != "running":

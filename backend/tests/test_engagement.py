@@ -127,6 +127,89 @@ def test_dm_fallback_after_threshold(db, make_item):
     assert summary["dm_sent"] == 1
 
 
+def test_only_one_write_action_per_pass(db, make_item):
+    # Two distinct creators both ready to comment. A single pass must advance
+    # only ONE of them (human-paced queue), deferring the other.
+    item_a = make_item()
+    item_b = make_item()
+    _engagement(db, item_a, creator_username="creatorA", needs_follow=False)
+    _engagement(db, item_b, creator_username="creatorB", needs_follow=False)
+    client = FakeClient()
+
+    summary = reconcile_once(db, client, _config(), datetime.now(UTC), sleeper=_noop_sleep)
+
+    assert len(client.comments) == 1
+    assert summary["commented"] == 1
+    assert summary["deferred"] == 1
+
+
+def test_min_action_gap_defers_when_recent_write(db, make_item):
+    # A comment happened 60s ago; with a 900s min gap, a fresh pending row
+    # must defer rather than fire back-to-back.
+    item_recent = make_item()
+    item_new = make_item()
+    _engagement(
+        db, item_recent, creator_username="recent", needs_follow=False,
+        status=EngagementStatus.AWAITING_REPLY,
+        commented_at=datetime.now(UTC) - timedelta(seconds=60),
+    )
+    pending = _engagement(db, item_new, creator_username="fresh", needs_follow=False)
+    client = FakeClient()
+
+    summary = reconcile_once(
+        db, client, _config(min_action_gap_s=900), datetime.now(UTC), sleeper=_noop_sleep
+    )
+    db.refresh(pending)
+    assert client.comments == []
+    assert pending.status == EngagementStatus.PENDING
+    assert summary["deferred"] >= 1
+
+
+def test_hourly_cap_defers(db, make_item):
+    # One comment 30 min ago (inside the hour, outside the min gap). With an
+    # hourly cap of 1, a fresh row must defer even though the daily cap is fine.
+    item_recent = make_item()
+    item_new = make_item()
+    _engagement(
+        db, item_recent, creator_username="hourly", needs_follow=False,
+        status=EngagementStatus.AWAITING_REPLY,
+        commented_at=datetime.now(UTC) - timedelta(minutes=30),
+    )
+    pending = _engagement(db, item_new, creator_username="fresh", needs_follow=False)
+    client = FakeClient()
+
+    summary = reconcile_once(
+        db, client, _config(min_action_gap_s=0, hourly_action_cap=1),
+        datetime.now(UTC), sleeper=_noop_sleep,
+    )
+    db.refresh(pending)
+    assert client.comments == []
+    assert pending.status == EngagementStatus.PENDING
+    assert summary["deferred"] >= 1
+
+
+def test_harvest_not_blocked_by_write_gates(db, make_item):
+    # Reading a creator's reply (a low-risk read) must still happen even when
+    # write gates (recent write) would block new follows/comments.
+    item = make_item()
+    eng = _engagement(
+        db, item, creator_username="creator1", needs_follow=False,
+        status=EngagementStatus.AWAITING_REPLY,
+        commented_at=datetime.now(UTC) - timedelta(seconds=30),  # recent write
+        creator_user_id="uid-creator1",
+    )
+    msgs = [{"timestamp": datetime.now(UTC), "text": "link https://ex.com/g", "urls": []}]
+    client = FakeClient(messages=msgs)
+
+    reconcile_once(
+        db, client, _config(min_action_gap_s=900), datetime.now(UTC), sleeper=_noop_sleep
+    )
+    db.refresh(eng)
+    item = db.get(SavedItem, item.id)
+    assert eng.status == EngagementStatus.RESOURCE_RECEIVED
+    assert item.resources[0]["url"] == "https://ex.com/g"
+
+
 def test_disabled_does_nothing(db, make_item):
     item = make_item()
     eng = _engagement(db, item)

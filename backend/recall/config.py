@@ -33,9 +33,19 @@ class Settings(BaseSettings):
     ig_password: str = ""
     ig_sessionid: str = ""
     instagrapi_session_path: str = "data/ig.session.json"
-    poll_interval_seconds: int = 300
-    poll_jitter_seconds: int = 30
+    # Egress proxy for all Instagram traffic (e.g. http://user:pass@host:port or
+    # socks5://...). Empty = direct. Use a residential/mobile proxy to avoid the
+    # datacenter-IP signal; the value is read fresh on each client build.
+    ig_proxy: str = ""
+    poll_interval_seconds: int = 900
+    poll_jitter_seconds: int = 120
     max_items_per_poll: int = 50
+    # Quiet hours: no polling/engagement during the account's local night so the
+    # automation pattern looks human. Whole hours [start, end) in account_timezone;
+    # start == end disables the window.
+    account_timezone: str = "Asia/Kolkata"
+    quiet_hours_start: int = 1
+    quiet_hours_end: int = 7
 
     # Gemini
     gemini_api_key: str = ""

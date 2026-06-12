@@ -7,11 +7,15 @@ POLLER_KEY = "poller"
 ENGAGEMENT_KEY = "engagement"
 
 # Enabled by default (burner account); conservative caps + delays keep it ban-safe.
+# One write action per reconcile pass, spaced >= min_action_gap_s apart, capped
+# per rolling hour and per day, and suppressed during the poller's quiet hours.
 DEFAULT_ENGAGEMENT_CONFIG = {
     "enabled": True,
-    "daily_follow_cap": 8,
-    "daily_comment_cap": 8,
-    "daily_dm_cap": 8,
+    "daily_follow_cap": 4,
+    "daily_comment_cap": 4,
+    "daily_dm_cap": 3,
+    "hourly_action_cap": 2,        # max write actions in any rolling hour
+    "min_action_gap_s": 900,       # >= 15 min between consecutive write actions
     "min_delay_s": 120,
     "max_delay_s": 600,
     "dm_fallback_after_s": 7200,   # DM the keyword if no reply 2h after commenting

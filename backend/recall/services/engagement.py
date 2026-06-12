@@ -21,9 +21,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from recall.config import get_settings
 from recall.db import get_session_factory
 from recall.instagram.bots import BotClientPool
 from recall.models import Engagement, EngagementChannel, EngagementStatus, SavedItem
+from recall.schedule import in_quiet_hours
 from recall.state import get_engagement_config
 
 logger = logging.getLogger(__name__)
@@ -213,6 +215,25 @@ def _today_count(db: Session, column, now: datetime) -> int:
     )
 
 
+def _writes_since(db: Session, since: datetime) -> int:
+    """Count write actions (comments + DMs) recorded at/after `since`.
+
+    Follows are not separately timestamped, but every follow is immediately
+    followed by a comment, so commented_at is a faithful proxy for write volume.
+    """
+    comments = (
+        db.query(Engagement)
+        .filter(Engagement.commented_at.is_not(None), Engagement.commented_at >= since)
+        .count()
+    )
+    dms = (
+        db.query(Engagement)
+        .filter(Engagement.dm_sent_at.is_not(None), Engagement.dm_sent_at >= since)
+        .count()
+    )
+    return comments + dms
+
+
 def _jitter_sleep(config: dict, sleeper=time.sleep) -> None:
     sleeper(random.uniform(config["min_delay_s"], config["max_delay_s"]))
 
@@ -230,6 +251,17 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
     follows_today = _today_count(db, Engagement.commented_at, now)  # follow precedes comment
     comments_today = _today_count(db, Engagement.commented_at, now)
     dms_today = _today_count(db, Engagement.dm_sent_at, now)
+
+    # Human-paced write budget: at most one write per pass, never closer than
+    # min_action_gap_s apart, and capped per rolling hour on top of the daily
+    # caps. Reads (harvesting creator replies) are not gated. Quiet hours are
+    # enforced by the caller (the service loop), not here.
+    gap_s = config.get("min_action_gap_s", 0)
+    hourly_cap = config.get("hourly_action_cap")
+    recent_write = _writes_since(db, now - timedelta(seconds=gap_s)) > 0 if gap_s else False
+    writes_this_hour = _writes_since(db, now - timedelta(hours=1))
+    can_write = (not recent_write) and (hourly_cap is None or writes_this_hour < hourly_cap)
+    did_write = False
 
     rows = db.scalars(
         select(Engagement).where(
@@ -255,9 +287,15 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
             else:
                 cl = client
             if eng.status in (EngagementStatus.PENDING, EngagementStatus.FOLLOWING):
-                # follow (if required), then comment - both gated by caps
+                # One human-paced write per pass: follow (if needed), then comment.
+                if did_write or not can_write:
+                    summary["deferred"] += 1
+                    continue
+                if comments_today >= config["daily_comment_cap"]:
+                    summary["deferred"] += 1
+                    continue
                 if eng.needs_follow and eng.status == EngagementStatus.PENDING:
-                    if comments_today >= config["daily_comment_cap"]:
+                    if follows_today >= config["daily_follow_cap"]:
                         summary["deferred"] += 1
                         continue
                     uid = eng.creator_user_id or cl.user_id(eng.creator_username)
@@ -269,15 +307,13 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
                     summary["followed"] += 1
                     db.commit()
 
-                if comments_today >= config["daily_comment_cap"]:
-                    summary["deferred"] += 1
-                    continue
                 _jitter_sleep(config, sleeper)
                 cl.comment(eng.media_pk, eng.keyword)
                 eng.commented_at = now
                 eng.status = EngagementStatus.AWAITING_REPLY
                 comments_today += 1
                 summary["commented"] += 1
+                did_write = True
                 db.commit()
 
             elif eng.status in (EngagementStatus.AWAITING_REPLY, EngagementStatus.DM_SENT):
@@ -326,6 +362,9 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
                     and not eng.dm_sent_at
                     and age >= config["dm_fallback_after_s"]
                 ):
+                    if did_write or not can_write:
+                        summary["deferred"] += 1
+                        continue
                     if dms_today >= config["daily_dm_cap"]:
                         summary["deferred"] += 1
                         continue
@@ -335,6 +374,7 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
                     eng.status = EngagementStatus.DM_SENT
                     dms_today += 1
                     summary["dm_sent"] += 1
+                    did_write = True
                     db.commit()
                 elif age >= config["exhaust_after_s"]:
                     eng.status = EngagementStatus.EXHAUSTED
@@ -354,10 +394,19 @@ def reconcile_once(db: Session, client, config: dict, now: datetime, sleeper=tim
 
 def run_forever(poll_interval_s: int = 60) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    settings = get_settings()
     factory = get_session_factory()
     client = None
     while True:
         try:
+            if in_quiet_hours(
+                datetime.now(UTC),
+                settings.quiet_hours_start,
+                settings.quiet_hours_end,
+                settings.account_timezone,
+            ):
+                time.sleep(min(600, poll_interval_s * 5))
+                continue
             with factory() as db:
                 config = get_engagement_config(db)
                 if not config.get("enabled"):
@@ -371,7 +420,8 @@ def run_forever(poll_interval_s: int = 60) -> None:
         except Exception:
             logger.exception("engagement loop error")
             client = None
-        time.sleep(poll_interval_s)
+        # Vary the inter-pass interval so the cadence isn't a fixed metronome.
+        time.sleep(poll_interval_s * random.uniform(0.7, 1.6))
 
 
 if __name__ == "__main__":

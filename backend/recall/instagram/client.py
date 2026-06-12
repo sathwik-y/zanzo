@@ -38,6 +38,8 @@ def build_client() -> Client:
 
     cl = Client()
     cl.delay_range = [2, 5]  # human-ish pacing between consecutive requests
+    if settings.ig_proxy:
+        cl.set_proxy(settings.ig_proxy)
 
     if session_path.exists():
         cl.load_settings(session_path)
@@ -73,6 +75,8 @@ def build_client_for_bot(username: str, sessionid: str) -> Client:
 
     cl = Client()
     cl.delay_range = [2, 5]
+    if settings.ig_proxy:
+        cl.set_proxy(settings.ig_proxy)
     if session_path.exists():
         cl.load_settings(session_path)
     try:
